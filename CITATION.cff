@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "AWS EFA GPU Benchmark"
+abstract: "High-performance RDMA communication experiments using CUDA and Amazon Elastic Fabric Adapter (EFA)"
+authors:
+  - family-names: "Tsai"
+    given-names: "Chang-Ning"
+    orcid: "https://orcid.org/0009-0000-5297-5940"
+repository-code: "https://github.com/crazyguitar/Libefaxx"
+url: "https://github.com/crazyguitar/Libefaxx"
+license: Apache-2.0
+keywords:
+  - RDMA
+  - CUDA
+  - EFA
+  - High-Performance Computing
+  - GPU Communication
+  - Amazon EFA
+  - Fabric
+  - MPI
+version: "1.0.0"
+date-released: "2025-12-13"
