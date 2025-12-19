@@ -1,0 +1,8 @@
+add_subdirectory(queue)
+add_subdirectory(echo)
+add_subdirectory(affinity)
+add_subdirectory(efa)
+add_subdirectory(bootstrap)
+add_subdirectory(sendrecv)
+add_subdirectory(write)
+add_subdirectory(all2all)
