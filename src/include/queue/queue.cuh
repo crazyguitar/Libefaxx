@@ -45,6 +45,9 @@
  */
 template <typename T>
 struct Queue {
+  /// Default queue capacity (must be power of two)
+  static constexpr size_t kDefaultSize = 8192;
+
   struct Cell {
     cuda::std::atomic<uint64_t> sequence;
     T data;
@@ -59,7 +62,7 @@ struct Queue {
    * Construct a new Queue with the given size.
    * @param size Must be a power of two. Aborts if not.
    */
-  __host__ Queue(size_t size) : mask{size - 1} {
+  __host__ Queue(size_t size = kDefaultSize) : mask{size - 1} {
     // Validate that size is a power of two (always checked, even in release builds)
     if (size == 0 || (size & (size - 1)) != 0) {
       fprintf(stderr, "Queue size must be a positive power of two, got: %zu\n", size);

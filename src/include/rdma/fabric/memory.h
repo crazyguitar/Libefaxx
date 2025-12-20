@@ -8,7 +8,13 @@
 #pragma once
 
 #include <bootstrap/mpi/mpi.h>
+#include <io/selector.h>
 #include <rdma/fabric/buffer.h>
+#include <rdma/fabric/request.h>
+
+#include <algorithm>
+#include <array>
+#include <queue/queue.cuh>
 
 /**
  * @brief Template for device buffer class with RDMA write capabilities
@@ -19,7 +25,7 @@
  * @tparam BufferType The underlying buffer type (DeviceDMABuffer or DevicePinBuffer)
  */
 template <typename BufferType>
-class DeviceMemory : public BufferType {
+class DeviceMemory : public BufferType, public detail::Selector {
  public:
   /**
    * @brief Construct DeviceMemory with GPU memory allocation
@@ -163,6 +169,87 @@ class DeviceMemory : public BufferType {
     return BufferType::Writeall(addr, key, imm_data, ch);
   }
 
+ public:
+  /**
+   * @brief Awaiter for retrieving and merging GPU device requests
+   *
+   * Groups requests by type, merges contiguous address ranges within each type,
+   * and returns the combined result when resumed.
+   */
+  struct DeviceRequestAwaiter {
+    DeviceMemory* memory;
+
+    constexpr bool await_ready() const noexcept { return false; }
+
+    /**
+     * @brief Merge contiguous requests by type and return combined result
+     * @return Vector of merged device requests
+     */
+    inline std::vector<DeviceRequest> await_resume() noexcept {
+      auto& reqs = memory->requests_;
+      if (reqs.empty()) return {};
+
+      // Group by type
+      std::array<std::vector<DeviceRequest>, static_cast<size_t>(DeviceRequestType::kCount)> grouped;
+      for (auto& r : reqs) grouped[r.type].push_back(r);
+      reqs.clear();
+
+      // Merge within each type, then combine
+      std::vector<DeviceRequest> result;
+      for (auto& g : grouped) {
+        if (g.empty()) continue;
+        std::sort(g.begin(), g.end(), [](const auto& a, const auto& b) { return a.src < b.src; });
+        result.push_back(g[0]);
+        for (size_t i = 1; i < g.size(); ++i) {
+          auto& last = result.back();
+          const auto& cur = g[i];
+          if (cur.src == last.src + last.size && cur.dst == last.dst + last.size) {
+            last.size += cur.size;
+          } else {
+            result.push_back(cur);
+          }
+        }
+      }
+      return result;
+    }
+
+    /**
+     * @brief Suspend coroutine if no requests available
+     * @param coroutine Coroutine handle to suspend
+     * @return true if suspended, false if data ready
+     */
+    template <typename Promise>
+    inline bool await_suspend(std::coroutine_handle<Promise> coroutine) noexcept {
+      coroutine.promise().SetState(Handle::kSuspend);
+      if (!memory->requests_.empty()) return false;
+      memory->handles_.emplace_back(&coroutine.promise());
+      return true;
+    }
+  };
+
+  /**
+   * @brief Get awaiter for device requests from GPU queue
+   * @return DeviceRequestAwaiter for co_await
+   */
+  [[nodiscard]] auto GetDeviceRequests() { return DeviceRequestAwaiter{this}; }
+
+  /**
+   * @brief Poll GPU queue and resume waiting coroutines
+   * @param duration Timeout duration (unused)
+   * @return Vector of events for ready coroutines
+   */
+  [[nodiscard]] std::vector<Event> Select(ms duration) override final {
+    DeviceRequest req;
+    while (queue_.Pop(req)) requests_.emplace_back(req);
+    if (requests_.empty() or handles_.empty()) return {};
+    std::vector<Event> res;
+    res.emplace_back(Event{-1, 0, handles_.front()});
+    handles_.pop_front();
+    return res;
+  }
+
+  [[nodiscard]] bool Stopped() const noexcept override final { return false; }
+
  private:
   /**
    * @brief Get remote address and key for write operations
@@ -178,6 +265,11 @@ class DeviceMemory : public BufferType {
     ASSERT(offset + len <= rma_iov.len);
     return {rma_iov.addr + offset, rma_iov.key};
   }
+
+ private:
+  Queue<DeviceRequest> queue_;
+  std::vector<DeviceRequest> requests_;
+  std::deque<Handle*> handles_;
 };
 
 /**
