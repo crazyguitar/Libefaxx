@@ -13,7 +13,6 @@
 #include <rdma/fabric/request.h>
 
 #include <algorithm>
-#include <array>
 #include <queue/queue.cuh>
 
 /**
@@ -189,27 +188,21 @@ class DeviceMemory : public BufferType, public detail::Selector {
       auto& reqs = memory->requests_;
       if (reqs.empty()) return {};
 
-      // Group by type
-      std::array<std::vector<DeviceRequest>, static_cast<size_t>(DeviceRequestType::kCount)> grouped;
-      for (auto& r : reqs) grouped[r.type].push_back(r);
-      reqs.clear();
+      std::sort(reqs.begin(), reqs.end(), [](const auto& a, const auto& b) { return std::tie(a.type, a.src) < std::tie(b.type, b.src); });
 
-      // Merge within each type, then combine
       std::vector<DeviceRequest> result;
-      for (auto& g : grouped) {
-        if (g.empty()) continue;
-        std::sort(g.begin(), g.end(), [](const auto& a, const auto& b) { return a.src < b.src; });
-        result.push_back(g[0]);
-        for (size_t i = 1; i < g.size(); ++i) {
-          auto& last = result.back();
-          const auto& cur = g[i];
-          if (cur.src == last.src + last.size && cur.dst == last.dst + last.size) {
-            last.size += cur.size;
-          } else {
-            result.push_back(cur);
-          }
+      result.reserve(reqs.size());
+      result.push_back(std::move(reqs[0]));
+      for (size_t i = 1; i < reqs.size(); ++i) {
+        auto& last = result.back();
+        auto& cur = reqs[i];
+        if (cur.type == last.type && cur.src == last.src + last.size && cur.dst == last.dst + last.size) {
+          last.size += cur.size;
+        } else {
+          result.push_back(std::move(cur));
         }
       }
+      reqs.clear();
       return result;
     }
 
@@ -238,14 +231,13 @@ class DeviceMemory : public BufferType, public detail::Selector {
    * @param duration Timeout duration (unused)
    * @return Vector of events for ready coroutines
    */
-  [[nodiscard]] std::vector<Event> Select(ms duration) override final {
+  [[nodiscard]] std::vector<Event> Select(ms) override final {
     DeviceRequest req;
     while (queue_.Pop(req)) requests_.emplace_back(req);
-    if (requests_.empty() or handles_.empty()) return {};
-    std::vector<Event> res;
-    res.emplace_back(Event{-1, 0, handles_.front()});
+    if (requests_.empty() || handles_.empty()) return {};
+    auto* handle = handles_.front();
     handles_.pop_front();
-    return res;
+    return {{-1, 0, handle}};
   }
 
   [[nodiscard]] bool Stopped() const noexcept override final { return false; }
