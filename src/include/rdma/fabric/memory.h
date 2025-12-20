@@ -215,7 +215,7 @@ class DeviceMemory : public BufferType, public detail::Selector {
     inline bool await_suspend(std::coroutine_handle<Promise> coroutine) noexcept {
       coroutine.promise().SetState(Handle::kSuspend);
       if (!memory->requests_.empty()) return false;
-      memory->handles_.emplace_back(&coroutine.promise());
+      memory->handle_ = &coroutine.promise();
       return true;
     }
   };
@@ -234,10 +234,10 @@ class DeviceMemory : public BufferType, public detail::Selector {
   [[nodiscard]] std::vector<Event> Select(ms) override final {
     DeviceRequest req;
     while (queue_.Pop(req)) requests_.emplace_back(req);
-    if (requests_.empty() || handles_.empty()) return {};
-    auto* handle = handles_.front();
-    handles_.pop_front();
-    return {{-1, 0, handle}};
+    if (requests_.empty() || !handle_) return {};
+    auto* h = handle_;
+    handle_ = nullptr;
+    return {{-1, 0, h}};
   }
 
   [[nodiscard]] bool Stopped() const noexcept override final { return false; }
@@ -261,7 +261,7 @@ class DeviceMemory : public BufferType, public detail::Selector {
  private:
   Queue<DeviceRequest> queue_;
   std::vector<DeviceRequest> requests_;
-  std::deque<Handle*> handles_;
+  Handle* handle_ = nullptr;
 };
 
 /**
