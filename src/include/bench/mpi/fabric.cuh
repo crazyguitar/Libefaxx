@@ -14,10 +14,10 @@
  * @brief Result from a single benchmark run
  */
 struct BenchResult {
-  size_t size;    /**< Buffer size in bytes */
-  double time_us; /**< Average time per iteration in microseconds */
-  double bw_gbps; /**< Achieved bandwidth in Gbps */
-  double bus_bw;  /**< Bus bandwidth utilization ratio */
+  size_t size;     ///< Buffer size in bytes
+  double time_us;  ///< Average time per iteration in microseconds
+  double bw_gbps;  ///< Achieved bandwidth in Gbps
+  double bus_bw;   ///< Bus bandwidth utilization ratio
 };
 
 /**

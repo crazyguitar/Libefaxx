@@ -5,8 +5,8 @@
  * Measures RDMA write bandwidth between rank 0 and all other ranks.
  * Pattern: rank0 -> rank_k (k=1..N-1), results averaged across all pairs.
  */
+#include <bench/arguments.h>
 #include <bench/print.h>
-#include <write/arguments.h>
 
 #include <write/write.cuh>
 

@@ -5,8 +5,8 @@
  * Measures send/recv bandwidth between rank 0 and all other ranks.
  * Pattern: rank0 <-> rank_k (k=1..N-1), results averaged across all pairs.
  */
+#include <bench/arguments.h>
 #include <bench/print.h>
-#include <sendrecv/arguments.h>
 
 #include <sendrecv/sendrecv.cuh>
 
@@ -70,8 +70,8 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
   return results;
 }
 
-using SingleDevice = Test<DeviceDMABuffer>; /**< GPU DMA buffer test */
-using SingleHost = Test<HostBuffer>;        /**< Host pinned buffer test */
+using SingleDevice = Test<DeviceDMABuffer>;  ///< GPU DMA buffer test
+using SingleHost = Test<HostBuffer>;         ///< Host pinned buffer test
 
 int main(int argc, char* argv[]) {
   try {

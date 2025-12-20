@@ -5,7 +5,7 @@
  * Measures RDMA write bandwidth using all-to-all communication pattern.
  * Tests single/multi channel with DMA and pinned memory.
  */
-#include <all2all/arguments.h>
+#include <bench/arguments.h>
 #include <bench/print.h>
 #include <rdma/fabric/memory.h>
 #include <rdma/proxy.h>

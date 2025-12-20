@@ -19,8 +19,8 @@
  * Other ranks skip this operation.
  */
 struct SendRecv {
-  int target;  /**< Target rank to communicate with */
-  int channel; /**< EFA channel to use */
+  int target;   ///< Target rank to communicate with
+  int channel;  ///< EFA channel to use
 
   /**
    * @brief Execute send then recv on rank 0
@@ -48,8 +48,8 @@ struct SendRecv {
  * Non-target ranks skip this operation.
  */
 struct RecvSend {
-  int target;  /**< This rank's ID (only this rank executes) */
-  int channel; /**< EFA channel to use */
+  int target;   ///< This rank's ID (only this rank executes)
+  int channel;  ///< EFA channel to use
 
   /**
    * @brief Execute recv then send on target rank
@@ -77,8 +77,8 @@ struct RecvSend {
  * to complete one round-trip communication.
  */
 struct PairBench {
-  int target;  /**< Target rank to communicate with */
-  int channel; /**< EFA channel to use */
+  int target;   ///< Target rank to communicate with
+  int channel;  ///< EFA channel to use
 
   /**
    * @brief Execute paired send/recv operation
