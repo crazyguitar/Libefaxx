@@ -253,4 +253,45 @@ class FabricBench : public Peer {
     verify(*this, b);
     return {buf_size, avg_us, bw_gbps, bus_bw};
   }
+
+  /**
+   * @brief Print complete benchmark summary
+   * @tparam N Number of results per row
+   * @param title Benchmark title/name
+   * @param nranks Number of MPI ranks
+   * @param warmup Number of warmup iterations
+   * @param iters Number of benchmark iterations
+   * @param link_bw Theoretical link bandwidth in Gbps
+   * @param pattern Description of communication pattern
+   * @param columns Column names for results
+   * @param results Vector of result arrays to print
+   */
+  template <size_t N>
+  static void Print(
+      const char* title,
+      int nranks,
+      int warmup,
+      int iters,
+      double link_bw,
+      const char* pattern,
+      const std::vector<std::string>& columns,
+      const std::vector<std::array<BenchResult, N>>& results
+  ) {
+    printf("#\n# %s\n#\n", title);
+    printf("# nranks: %d\n", nranks);
+    printf("# warmup iters: %d\n", warmup);
+    printf("# bench iters: %d\n", iters);
+    printf("# link bandwidth: %.0f Gbps\n#\n", link_bw);
+    if (pattern) printf("# Pattern: %s\n#\n", pattern);
+    printf("# BusBW: Percentage of theoretical link bandwidth achieved\n#\n");
+    printf("%12s %12s", "size", "count");
+    for (const auto& col : columns) printf(" %14s %10s", col.c_str(), "BusBW(%)");
+    printf("\n");
+    for (const auto& r : results) {
+      printf("%12zu %12zu", r[0].size, r[0].size / sizeof(float));
+      for (const auto& v : r) printf(" %14.2f %10.1f", v.bw_gbps, v.bus_bw);
+      printf("\n");
+    }
+    printf("#\n# Benchmark complete.\n");
+  }
 };

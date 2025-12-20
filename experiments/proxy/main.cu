@@ -6,7 +6,6 @@
  * Pattern: rank0 -> rank_k (k=1..N-1), results averaged across all pairs.
  */
 #include <bench/arguments.h>
-#include <bench/print.h>
 
 #include <write/write.cuh>
 
@@ -109,11 +108,10 @@ int main(int argc, char* argv[]) {
     }
 
     if (rank == 0) {
-      BenchPrinter printer(
+      FabricBench::Print(
           "EFA Write Benchmark", nranks, opts.warmup, opts.repeat, single_bw, "rank0 -> rank_k (k=1..N-1), averaged across all pairs",
-          {"SinglePin", "SingleDMA", "MultiDMA"}
+          {"SinglePin", "SingleDMA", "MultiDMA"}, results
       );
-      printer.Print(results);
     }
     return 0;
   } catch (const std::exception& e) {

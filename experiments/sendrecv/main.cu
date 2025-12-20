@@ -6,7 +6,6 @@
  * Pattern: rank0 <-> rank_k (k=1..N-1), results averaged across all pairs.
  */
 #include <bench/arguments.h>
-#include <bench/print.h>
 
 #include <sendrecv/sendrecv.cuh>
 
@@ -92,11 +91,10 @@ int main(int argc, char* argv[]) {
 
     // Print summary at the end (rank 0 only)
     if (rank == 0) {
-      BenchPrinter printer(
+      FabricBench::Print(
           "EFA SendRecv Benchmark", nranks, opts.warmup, opts.repeat, link_bw, "rank0 <-> rank_k (k=1..N-1), averaged across all pairs",
-          {"Device(Gbps)", "Host(Gbps)"}
+          {"Device(Gbps)", "Host(Gbps)"}, results
       );
-      printer.Print(results);
     }
     return 0;
   } catch (const std::exception& e) {

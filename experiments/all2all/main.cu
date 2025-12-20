@@ -6,7 +6,6 @@
  * Tests single/multi channel with DMA and pinned memory.
  */
 #include <bench/arguments.h>
-#include <bench/print.h>
 #include <rdma/fabric/memory.h>
 #include <rdma/proxy.h>
 
@@ -90,11 +89,10 @@ int main(int argc, char* argv[]) {
     }
 
     if (rank == 0) {
-      BenchPrinter printer(
+      FabricBench::Print(
           "EFA RDMA Write Benchmark", nranks, opts.warmup, opts.repeat, single_bw, "all-to-all RDMA write",
-          {"SingleDMA", "MultiDMA", "SinglePin", "MultiPin"}
+          {"SingleDMA", "MultiDMA", "SinglePin", "MultiPin"}, results
       );
-      printer.Print(results);
     }
     return 0;
   } catch (const std::exception& e) {
