@@ -6,8 +6,10 @@
  * Pattern: rank0 -> rank_k (k=1..N-1), results averaged across all pairs.
  */
 #include <bench/arguments.h>
+#include <rdma/fabric/memory.h>
 
-#include <write/write.cuh>
+#include <bench/modules/write.cuh>
+#include <bench/mpi/fabric.cuh>
 
 /** @brief Bandwidth type tags */
 struct SingleLinkBW {};
@@ -33,8 +35,8 @@ struct Test {
     double sum_time = 0;
     for (int t = 1; t < world; ++t) {
       if (rank == 0) RandInit(write[t].get(), num_ints, peer.stream);
-      peer.Warmup(write, read, PairWrite{t, 0}, NoVerify{}, opts.warmup);
-      auto r = peer.Bench(write, read, PairWrite{t, 0}, NoVerify{}, opts.repeat);
+      peer.Warmup(write, read, PairWrite<FabricBench>{t, 0}, NoVerify{}, opts.warmup);
+      auto r = peer.Bench(write, read, PairWrite<FabricBench>{t, 0}, NoVerify{}, opts.repeat);
       sum_bw += r.bw_gbps;
       sum_time += r.time_us;
     }
@@ -66,8 +68,8 @@ struct TestMulti {
     double sum_time = 0;
     for (int t = 1; t < world; ++t) {
       if (rank == 0) RandInit(write[t].get(), num_ints, peer.stream);
-      peer.Warmup(write, read, PairWriteMulti{t}, NoVerify{}, opts.warmup);
-      auto r = peer.Bench(write, read, PairWriteMulti{t}, NoVerify{}, opts.repeat);
+      peer.Warmup(write, read, PairWriteMulti<FabricBench>{t}, NoVerify{}, opts.warmup);
+      auto r = peer.Bench(write, read, PairWriteMulti<FabricBench>{t}, NoVerify{}, opts.repeat);
       sum_bw += r.bw_gbps;
       sum_time += r.time_us;
     }

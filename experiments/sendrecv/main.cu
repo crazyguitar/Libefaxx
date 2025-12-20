@@ -7,7 +7,8 @@
  */
 #include <bench/arguments.h>
 
-#include <sendrecv/sendrecv.cuh>
+#include <bench/modules/sendrecv.cuh>
+#include <bench/mpi/fabric.cuh>
 
 /**
  * @brief Test configuration for a specific buffer type
@@ -41,8 +42,8 @@ struct Test {
       else if (rank == t)
         RandInit(send[0].get(), num_ints, peer.stream);
 
-      peer.Warmup(send, recv, PairBench{t}, NoVerify{}, opts.warmup);
-      auto r = peer.Bench(send, recv, PairBench{t}, NoVerify{}, opts.repeat);
+      peer.Warmup(send, recv, PairBench<FabricBench>{t}, NoVerify{}, opts.warmup);
+      auto r = peer.Bench(send, recv, PairBench<FabricBench>{t}, NoVerify{}, opts.repeat);
       total_bw += r.bw_gbps;
       total_time += r.time_us;
     }

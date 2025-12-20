@@ -9,7 +9,7 @@
 #include <rdma/fabric/memory.h>
 #include <rdma/proxy.h>
 
-#include <all2all/all2all.cuh>
+#include <bench/modules/all2all.cuh>
 #include <bench/mpi/fabric.cuh>
 
 /** @brief Bandwidth type tags */
