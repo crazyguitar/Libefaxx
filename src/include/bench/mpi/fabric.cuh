@@ -6,6 +6,7 @@
 
 #include <bootstrap/mpi/fabric.h>
 #include <io/progress.h>
+#include <rdma/fabric/memory.h>
 
 #include <chrono>
 #include <device/common.cuh>
@@ -44,10 +45,22 @@ std::unique_ptr<T> MakeBuffer(std::vector<Channel>& c, int device, size_t size, 
   return std::make_unique<T>(c, size, world_size, device);
 }
 
-/** @brief Create buffer specialization for raw HostBuffer (no world_size) */
+/** @brief Create buffer specialization for raw HostBuffer */
 template <>
 inline std::unique_ptr<HostBuffer> MakeBuffer(std::vector<Channel>& c, int device, size_t size, int) {
   return std::make_unique<HostBuffer>(c, device, size);
+}
+
+/** @brief Create buffer specialization for raw DeviceDMABuffer */
+template <>
+inline std::unique_ptr<DeviceDMABuffer> MakeBuffer(std::vector<Channel>& c, int device, size_t size, int) {
+  return std::make_unique<DeviceDMABuffer>(c, device, size);
+}
+
+/** @brief Create buffer specialization for raw DevicePinBuffer */
+template <>
+inline std::unique_ptr<DevicePinBuffer> MakeBuffer(std::vector<Channel>& c, int device, size_t size, int) {
+  return std::make_unique<DevicePinBuffer>(c, device, size);
 }
 
 /**
@@ -70,6 +83,13 @@ void InitBuffer(T* buf, size_t num_ints, int value, cudaStream_t stream) {
 /** @brief Initialize buffer specialization for HostBuffer (CPU loop) */
 template <>
 inline void InitBuffer(HostBuffer* buf, size_t num_ints, int value, cudaStream_t) {
+  int* data = reinterpret_cast<int*>(buf->Data());
+  for (size_t i = 0; i < num_ints; ++i) data[i] = value;
+}
+
+/** @brief Initialize buffer specialization for SymmetricHostMemory (CPU loop) */
+template <>
+inline void InitBuffer(SymmetricHostMemory* buf, size_t num_ints, int value, cudaStream_t) {
   int* data = reinterpret_cast<int*>(buf->Data());
   for (size_t i = 0; i < num_ints; ++i) data[i] = value;
 }
@@ -165,7 +185,7 @@ struct NoVerify {
  * @brief RDMA peer with CUDA stream and benchmarking support
  *
  * Extends Peer with buffer allocation, warmup, and timed benchmarking.
- * @tparam T Buffer type (e.g., DeviceDMAMemory, HostBuffer)
+ * @tparam T Buffer type (e.g., SymmetricDMAMemory, HostBuffer)
  * @tparam F Communication functor (e.g., All2all)
  * @tparam V Verification functor (VerifyGPU or VerifyCPU)
  */

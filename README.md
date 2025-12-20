@@ -94,7 +94,7 @@ struct Test {
     int rank = peer.mpi.GetWorldRank();
     int world = peer.mpi.GetWorldSize();
     auto send = peer.Alloc<BufType>(size, rank);
-    auto recv = peer.Alloc<BufType>(size, 0);
+    auto recv = peer.Alloc<BufType>(size, -1);
     auto noop = [](auto&, auto&) {};
     std::vector<BenchResult> res;
     for (int t = 1; t < world; ++t) res.emplace_back(peer.Bench(send, recv, PairBench{t}, noop, 100));
@@ -102,7 +102,7 @@ struct Test {
   }
 };
 
-using DeviceTest = Test<DeviceDMAMemory>;
+using DeviceTest = Test<SymmetricDMAMemory>;
 
 // mpirun -np 2 --npernode 1 example
 

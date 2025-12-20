@@ -185,9 +185,3 @@ using SymmetricPinMemory = SymmetricMemory<DevicePinBuffer>;
 
 /** @brief Symmetric memory with host memory */
 using SymmetricHostMemory = SymmetricMemory<HostBuffer>;
-
-/** @brief Alias for backward compatibility */
-using DeviceDMAMemory = SymmetricDMAMemory;
-
-/** @brief Alias for backward compatibility */
-using DevicePinMemory = SymmetricPinMemory;

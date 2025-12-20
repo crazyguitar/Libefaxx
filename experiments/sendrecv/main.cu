@@ -6,6 +6,7 @@
  * Pattern: rank0 <-> rank_k (k=1..N-1), results averaged across all pairs.
  */
 #include <bench/arguments.h>
+#include <rdma/fabric/memory.h>
 
 #include <bench/modules/sendrecv.cuh>
 #include <bench/mpi/fabric.cuh>
@@ -55,7 +56,7 @@ struct Test {
     int world = peer.mpi.GetWorldSize();
 
     auto send = peer.Alloc<BufType>(size, rank);
-    auto recv = peer.Alloc<BufType>(size, 0);
+    auto recv = peer.Alloc<BufType>(size, -1);
 
     double total_bw = 0;
     double total_time = 0;
@@ -88,8 +89,8 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
   return results;
 }
 
-using SingleDevice = Test<DeviceDMABuffer, PairVerifyGPU>;  ///< GPU DMA buffer test
-using SingleHost = Test<HostBuffer, PairVerifyCPU>;         ///< Host pinned buffer test
+using SingleDevice = Test<SymmetricDMAMemory, PairVerifyGPU>;  ///< GPU DMA buffer test
+using SingleHost = Test<SymmetricHostMemory, PairVerifyCPU>;   ///< Host pinned buffer test
 
 int main(int argc, char* argv[]) {
   try {

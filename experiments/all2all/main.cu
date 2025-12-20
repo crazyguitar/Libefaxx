@@ -67,10 +67,10 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
   return results;
 }
 
-using SingleDMA = Test<DeviceDMAMemory, All2all, SingleLinkBW>;
-using MultiDMA = Test<DeviceDMAMemory, All2allMulti, TotalLinkBW>;
-using SinglePin = Test<DevicePinMemory, All2all, SingleLinkBW>;
-using MultiPin = Test<DevicePinMemory, All2allMulti, TotalLinkBW>;
+using SingleDMA = Test<SymmetricDMAMemory, All2all, SingleLinkBW>;
+using MultiDMA = Test<SymmetricDMAMemory, All2allMulti, TotalLinkBW>;
+using SinglePin = Test<SymmetricPinMemory, All2all, SingleLinkBW>;
+using MultiPin = Test<SymmetricPinMemory, All2allMulti, TotalLinkBW>;
 
 int main(int argc, char* argv[]) {
   try {
