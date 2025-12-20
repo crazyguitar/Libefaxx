@@ -5,6 +5,7 @@
  * Measures send/recv bandwidth between rank 0 and all other ranks.
  * Pattern: rank0 <-> rank_k (k=1..N-1), results averaged across all pairs.
  */
+#include <bench/print.h>
 #include <sendrecv/arguments.h>
 
 #include <sendrecv/sendrecv.cuh>
@@ -91,12 +92,11 @@ int main(int argc, char* argv[]) {
 
     // Print summary at the end (rank 0 only)
     if (rank == 0) {
-      PrintBenchHeader(
+      BenchPrinter printer(
           "EFA SendRecv Benchmark", nranks, opts.warmup, opts.repeat, link_bw, "rank0 <-> rank_k (k=1..N-1), averaged across all pairs",
           {"Device(Gbps)", "Host(Gbps)"}
       );
-      for (const auto& r : results) PrintBenchResult(r);
-      PrintBenchFooter();
+      printer.Print(results);
     }
     return 0;
   } catch (const std::exception& e) {

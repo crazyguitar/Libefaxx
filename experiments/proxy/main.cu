@@ -5,6 +5,7 @@
  * Measures RDMA write bandwidth between rank 0 and all other ranks.
  * Pattern: rank0 -> rank_k (k=1..N-1), results averaged across all pairs.
  */
+#include <bench/print.h>
 #include <write/arguments.h>
 
 #include <write/write.cuh>
@@ -108,12 +109,11 @@ int main(int argc, char* argv[]) {
     }
 
     if (rank == 0) {
-      PrintBenchHeader(
+      BenchPrinter printer(
           "EFA Write Benchmark", nranks, opts.warmup, opts.repeat, single_bw, "rank0 -> rank_k (k=1..N-1), averaged across all pairs",
           {"SinglePin", "SingleDMA", "MultiDMA"}
       );
-      for (const auto& r : results) PrintBenchResult(r);
-      PrintBenchFooter();
+      printer.Print(results);
     }
     return 0;
   } catch (const std::exception& e) {
