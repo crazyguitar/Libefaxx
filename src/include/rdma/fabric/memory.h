@@ -24,7 +24,7 @@
  * @tparam BufferType The underlying buffer type (DeviceDMABuffer, DevicePinBuffer, or HostBuffer)
  */
 template <typename BufferType>
-class SymmetricMemory : public BufferType {
+class SymmetricMemory : public BufferType, public detail::Selector {
  public:
   /**
    * @brief Construct SymmetricMemory with buffer allocation
@@ -168,6 +168,78 @@ class SymmetricMemory : public BufferType {
       co_await BufferType::WaitImmdata(EncodeImmdata(imm_data, ch));
     }
   }
+
+  /**
+   * @brief Awaiter for retrieving and merging GPU device requests
+   *
+   * Groups requests by type, merges contiguous address ranges,
+   * and returns the combined result when resumed.
+   */
+  struct DeviceRequestAwaiter {
+    SymmetricMemory* memory;  ///< Parent memory instance
+
+    constexpr bool await_ready() const noexcept { return false; }
+
+    /**
+     * @brief Merge contiguous requests by type and return combined result
+     * @return Vector of merged device requests
+     */
+    inline std::vector<DeviceRequest> await_resume() noexcept {
+      auto& reqs = memory->requests_;
+      if (reqs.empty()) return {};
+      std::sort(reqs.begin(), reqs.end(), [](const auto& a, const auto& b) { return std::tie(a.type, a.src) < std::tie(b.type, b.src); });
+      std::vector<DeviceRequest> result;
+      result.reserve(reqs.size());
+      result.push_back(std::move(reqs[0]));
+      for (size_t i = 1; i < reqs.size(); ++i) {
+        auto& last = result.back();
+        auto& cur = reqs[i];
+        if (cur.type == last.type && cur.addr == last.addr + last.size) {
+          last.size += cur.size;
+        } else {
+          result.push_back(std::move(cur));
+        }
+      }
+      reqs.clear();
+      return result;
+    }
+
+    /**
+     * @brief Suspend coroutine if no requests available
+     * @param coroutine Coroutine handle to suspend
+     * @return true if suspended, false if data ready
+     */
+    template <typename Promise>
+    inline bool await_suspend(std::coroutine_handle<Promise> coroutine) noexcept {
+      coroutine.promise().SetState(Handle::kSuspend);
+      if (!memory->requests_.empty()) return false;
+      memory->handle_ = &coroutine.promise();
+      return true;
+    }
+  };
+
+  /**
+   * @brief Get awaiter for device requests from GPU queue
+   * @return DeviceRequestAwaiter for co_await
+   */
+  [[nodiscard]] auto GetDeviceRequests() { return DeviceRequestAwaiter{this}; }
+
+  /**
+   * @brief Poll GPU queue and resume waiting coroutines
+   * @param duration Timeout duration (unused)
+   * @return Vector of events for ready coroutines
+   */
+  [[nodiscard]] std::vector<Event> Select(ms) override final {
+    DeviceRequest req;
+    while (queue_.Pop(req)) requests_.emplace_back(req);
+    if (requests_.empty() || !handle_) return {};
+    auto* h = handle_;
+    handle_ = nullptr;
+    return {{-1, 0, h}};
+  }
+
+  /** @brief Check if selector is stopped (always false) */
+  [[nodiscard]] bool Stopped() const noexcept override final { return false; }
 
  private:
   int world_size_;                                 ///< Number of ranks in the world
