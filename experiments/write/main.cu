@@ -15,6 +15,21 @@
 struct SingleLinkBW {};
 struct TotalLinkBW {};
 
+/** @brief Pair-aware verification for RDMA write (only target receives) */
+struct WriteVerifyGPU {
+  int target;
+  template <typename P, typename Buffers>
+  void operator()(P& peer, Buffers& read) const {
+    const auto rank = peer.mpi.GetWorldRank();
+    if (rank != target) return;  // Only target verifies
+    const size_t buf_size = read[0]->Size();
+    const size_t num_ints = buf_size / sizeof(int);
+    std::vector<int> host_buf(num_ints);
+    CUDA_CHECK(cudaMemcpy(host_buf.data(), read[0]->Data(), buf_size, cudaMemcpyDeviceToHost));
+    if (VerifyBufferData(host_buf, 0, rank, 0) > 0) throw std::runtime_error("Verification failed");
+  }
+};
+
 /**
  * @brief Test configuration for single channel
  */
@@ -26,7 +41,6 @@ struct Test {
     peer.Connect();
     int rank = peer.mpi.GetWorldRank();
     int world = peer.mpi.GetWorldSize();
-    size_t num_ints = size / sizeof(int);
 
     auto [write, read] = peer.AllocPair<BufType>(size);
     peer.Handshake(write, read);
@@ -34,9 +48,8 @@ struct Test {
     double sum_bw = 0;
     double sum_time = 0;
     for (int t = 1; t < world; ++t) {
-      if (rank == 0) RandInit(write[t].get(), num_ints, peer.stream);
-      peer.Warmup(write, read, PairWrite<FabricBench>{t, 0}, NoVerify{}, opts.warmup);
-      auto r = peer.Bench(write, read, PairWrite<FabricBench>{t, 0}, NoVerify{}, opts.repeat);
+      peer.Warmup(write, read, PairWrite<FabricBench>{t, 0}, WriteVerifyGPU{t}, opts.warmup);
+      auto r = peer.Bench(write, read, PairWrite<FabricBench>{t, 0}, WriteVerifyGPU{t}, opts.repeat);
       sum_bw += r.bw_gbps;
       sum_time += r.time_us;
     }
@@ -59,7 +72,6 @@ struct TestMulti {
     peer.Connect();
     int rank = peer.mpi.GetWorldRank();
     int world = peer.mpi.GetWorldSize();
-    size_t num_ints = size / sizeof(int);
 
     auto [write, read] = peer.AllocPair<BufType>(size);
     peer.Handshake(write, read);
@@ -67,9 +79,8 @@ struct TestMulti {
     double sum_bw = 0;
     double sum_time = 0;
     for (int t = 1; t < world; ++t) {
-      if (rank == 0) RandInit(write[t].get(), num_ints, peer.stream);
-      peer.Warmup(write, read, PairWriteMulti<FabricBench>{t}, NoVerify{}, opts.warmup);
-      auto r = peer.Bench(write, read, PairWriteMulti<FabricBench>{t}, NoVerify{}, opts.repeat);
+      peer.Warmup(write, read, PairWriteMulti<FabricBench>{t}, WriteVerifyGPU{t}, opts.warmup);
+      auto r = peer.Bench(write, read, PairWriteMulti<FabricBench>{t}, WriteVerifyGPU{t}, opts.repeat);
       sum_bw += r.bw_gbps;
       sum_time += r.time_us;
     }

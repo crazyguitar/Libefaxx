@@ -62,11 +62,3 @@ struct PairBench {
     RecvSend<Peer>{target, channel}.template operator()<T>(peer, send, recv);
   }
 };
-
-/**
- * @brief No-op verification functor
- */
-struct NoVerify {
-  template <typename P, typename Buffers>
-  void operator()(P&, Buffers&) const {}
-};

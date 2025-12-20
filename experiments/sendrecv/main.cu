@@ -10,40 +10,58 @@
 #include <bench/modules/sendrecv.cuh>
 #include <bench/mpi/fabric.cuh>
 
+/** @brief Pair-aware verification for GPU buffers */
+struct PairVerifyGPU {
+  int target;
+  template <typename P, typename Buffers>
+  void operator()(P& peer, Buffers& recv) const {
+    const auto rank = peer.mpi.GetWorldRank();
+    const int peer_rank = (rank == 0) ? target : 0;
+    const size_t buf_size = recv[peer_rank]->Size();
+    const size_t num_ints = buf_size / sizeof(int);
+    std::vector<int> host_buf(num_ints);
+    CUDA_CHECK(cudaMemcpy(host_buf.data(), recv[peer_rank]->Data(), buf_size, cudaMemcpyDeviceToHost));
+    if (VerifyBufferData(host_buf, peer_rank, rank, peer_rank) > 0) throw std::runtime_error("Verification failed");
+  }
+};
+
+/** @brief Pair-aware verification for CPU buffers */
+struct PairVerifyCPU {
+  int target;
+  template <typename P, typename Buffers>
+  void operator()(P& peer, Buffers& recv) const {
+    const auto rank = peer.mpi.GetWorldRank();
+    const int peer_rank = (rank == 0) ? target : 0;
+    const size_t buf_size = recv[peer_rank]->Size();
+    const size_t num_ints = buf_size / sizeof(int);
+    std::vector<int> host_buf(num_ints);
+    std::memcpy(host_buf.data(), recv[peer_rank]->Data(), buf_size);
+    if (VerifyBufferData(host_buf, peer_rank, rank, peer_rank) > 0) throw std::runtime_error("Verification failed");
+  }
+};
+
 /**
  * @brief Test configuration for a specific buffer type
  * @tparam BufType Buffer type (DeviceDMABuffer or HostBuffer)
+ * @tparam PairVerify Pair-aware verification functor
  */
-template <typename BufType>
+template <typename BufType, typename PairVerify = PairVerifyGPU>
 struct Test {
-  /**
-   * @brief Run benchmark for given size
-   * @param size Buffer size in bytes
-   * @param opts Benchmark options (warmup, repeat iterations)
-   * @param link_bw Theoretical link bandwidth in Gbps
-   * @return BenchResult with averaged metrics across all pairs
-   */
   static BenchResult Run(size_t size, const Options& opts, double link_bw) {
     FabricBench peer;
     peer.Exchange();
     peer.Connect();
     int rank = peer.mpi.GetWorldRank();
     int world = peer.mpi.GetWorldSize();
-    size_t num_ints = size / sizeof(int);
 
     auto send = peer.Alloc<BufType>(size, rank);
-    auto recv = peer.Alloc<BufType>(size, -1);
+    auto recv = peer.Alloc<BufType>(size, 0);
 
     double total_bw = 0;
     double total_time = 0;
     for (int t = 1; t < world; ++t) {
-      if (rank == 0)
-        RandInit(send[t].get(), num_ints, peer.stream);
-      else if (rank == t)
-        RandInit(send[0].get(), num_ints, peer.stream);
-
-      peer.Warmup(send, recv, PairBench<FabricBench>{t}, NoVerify{}, opts.warmup);
-      auto r = peer.Bench(send, recv, PairBench<FabricBench>{t}, NoVerify{}, opts.repeat);
+      peer.Warmup(send, recv, PairBench<FabricBench>{t}, PairVerify{t}, opts.warmup);
+      auto r = peer.Bench(send, recv, PairBench<FabricBench>{t}, PairVerify{t}, opts.repeat);
       total_bw += r.bw_gbps;
       total_time += r.time_us;
     }
@@ -70,8 +88,8 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
   return results;
 }
 
-using SingleDevice = Test<DeviceDMABuffer>;  ///< GPU DMA buffer test
-using SingleHost = Test<HostBuffer>;         ///< Host pinned buffer test
+using SingleDevice = Test<DeviceDMABuffer, PairVerifyGPU>;  ///< GPU DMA buffer test
+using SingleHost = Test<HostBuffer, PairVerifyCPU>;         ///< Host pinned buffer test
 
 int main(int argc, char* argv[]) {
   try {

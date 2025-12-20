@@ -32,21 +32,22 @@ __global__ void InitBufferKernel(int* __restrict__ data, size_t len, int value) 
 }
 
 /**
- * @brief Create buffer for GPU memory types
+ * @brief Create buffer for SymmetricMemory types
  * @param c Channel vector for registration
  * @param device CUDA device ID
  * @param size Buffer size in bytes
+ * @param world_size Number of ranks
  * @return Unique pointer to created buffer
  */
 template <typename T>
-std::unique_ptr<T> MakeBuffer(std::vector<Channel>& c, int device, size_t size) {
-  return std::make_unique<T>(c, device, size);
+std::unique_ptr<T> MakeBuffer(std::vector<Channel>& c, int device, size_t size, int world_size) {
+  return std::make_unique<T>(c, device, size, world_size);
 }
 
-/** @brief Create buffer specialization for HostBuffer (no device needed) */
+/** @brief Create buffer specialization for raw HostBuffer (no world_size) */
 template <>
-inline std::unique_ptr<HostBuffer> MakeBuffer(std::vector<Channel>& c, int, size_t size) {
-  return std::make_unique<HostBuffer>(c, size);
+inline std::unique_ptr<HostBuffer> MakeBuffer(std::vector<Channel>& c, int device, size_t size, int) {
+  return std::make_unique<HostBuffer>(c, device, size);
 }
 
 /**
@@ -154,6 +155,12 @@ struct VerifyCPU {
   }
 };
 
+/** @brief No-op verification functor */
+struct NoVerify {
+  template <typename P, typename Buffers>
+  void operator()(P&, Buffers&) const {}
+};
+
 /**
  * @brief RDMA peer with CUDA stream and benchmarking support
  *
@@ -188,7 +195,7 @@ class FabricBench : public Peer {
     int value = (init_value == -1) ? rank : init_value;
     for (int i = 0; i < world_size; ++i) {
       if (i == rank) continue;
-      buffers[i] = MakeBuffer<T>(channels[i], device, size);
+      buffers[i] = MakeBuffer<T>(channels[i], device, size, world_size);
       InitBuffer(buffers[i].get(), num_ints, value, stream);
     }
     return buffers;

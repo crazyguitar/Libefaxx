@@ -1,8 +1,8 @@
 /**
  * @file memory.h
- * @brief Device memory buffer with RDMA write operations
+ * @brief Symmetric memory implementation for RDMA operations
  *
- * Implementation based on SymmetricMemory design patterns for
+ * Implementation based on NVSHMEM/OpenSHMEM design patterns for
  * high-performance GPU-to-GPU communication over fabric networks.
  */
 #pragma once
@@ -16,66 +16,104 @@
 #include <queue/queue.cuh>
 
 /**
- * @brief Template for device buffer class with RDMA write capabilities
+ * @brief Symmetric memory class with 2D RMA IOV structure
  *
- * Provides RDMA write operations using remote memory regions.
- * Manages remote RMA IOVs for write operations to peer buffers.
+ * Manages RMA IOVs in a 2D structure: rma_iovs_[rank][channel]
+ * enabling symmetric memory access patterns like NVSHMEM/OpenSHMEM.
  *
- * @tparam BufferType The underlying buffer type (DeviceDMABuffer or DevicePinBuffer)
+ * @tparam BufferType The underlying buffer type (DeviceDMABuffer, DevicePinBuffer, or HostBuffer)
  */
 template <typename BufferType>
-class DeviceMemory : public BufferType, public detail::Selector {
+class SymmetricMemory : public BufferType {
  public:
   /**
-   * @brief Construct DeviceMemory with GPU memory allocation
+   * @brief Construct SymmetricMemory with buffer allocation
    * @param channels Channels for transferring data
-   * @param device CUDA device ID
+   * @param device CUDA device ID (ignored for HostBuffer)
    * @param size Buffer size in bytes
-   * @param align Memory alignment in bytes (default: 128)
+   * @param world_size Number of ranks in the world
+   * @param align Memory alignment in bytes
    */
-  DeviceMemory(std::vector<Channel>& channels, int device, size_t size, size_t align = BufferType::kAlign)
-      : BufferType(channels, device, size, align) {}
+  SymmetricMemory(std::vector<Channel>& channels, int device, size_t size, int world_size, size_t align = BufferType::kAlign)
+      : BufferType(channels, device, size, align), world_size_(world_size) {
+    rma_iovs_.resize(world_size_);
+  }
 
   /**
-   * @brief Write data to remote buffer
-   * @param buffer Source buffer to write from
-   * @param len Number of bytes to write
+   * @brief Get local RMA IOV for a specific channel
+   * @param ch Channel index
+   * @return RMA IOV for the local buffer on the specified channel
+   */
+  [[nodiscard]] fi_rma_iov GetLocalRmaIov(size_t ch) noexcept { return BufferType::MakeRmaIov(this->RdmaData(), this->Size(), this->mrs_[ch]); }
+
+  /**
+   * @brief Get all local RMA IOVs (one per channel)
+   * @return Vector of RMA IOVs for all channels
+   */
+  [[nodiscard]] std::vector<fi_rma_iov> GetLocalRmaIovs() {
+    std::vector<fi_rma_iov> iovs;
+    iovs.reserve(this->mrs_.size());
+    for (size_t ch = 0; ch < this->mrs_.size(); ++ch) iovs.push_back(GetLocalRmaIov(ch));
+    return iovs;
+  }
+
+  /**
+   * @brief Set remote RMA IOVs for a specific rank
+   * @param rank Remote rank
+   * @param iovs Vector of RMA IOVs (one per channel)
+   */
+  void SetRemoteRmaIovs(int rank, std::vector<fi_rma_iov> iovs) noexcept {
+    ASSERT(rank >= 0 && rank < world_size_);
+    rma_iovs_[rank] = std::move(iovs);
+  }
+
+  /**
+   * @brief Get remote RMA IOV for a specific rank and channel
+   * @param rank Remote rank
+   * @param ch Channel index
+   * @return Reference to the RMA IOV
+   */
+  [[nodiscard]] const fi_rma_iov& GetRemoteRmaIov(int rank, size_t ch) const noexcept {
+    ASSERT(rank >= 0 && rank < world_size_ && ch < rma_iovs_[rank].size());
+    return rma_iovs_[rank][ch];
+  }
+
+  /**
+   * @brief Get all remote RMA IOVs for a specific rank
+   * @param rank Remote rank
+   * @return Reference to vector of RMA IOVs for all channels
+   */
+  [[nodiscard]] const std::vector<fi_rma_iov>& GetRemoteRmaIovs(int rank) const noexcept {
+    ASSERT(rank >= 0 && rank < world_size_);
+    return rma_iovs_[rank];
+  }
+
+  /**
+   * @brief Write entire buffer to remote rank (single channel)
+   * @param rank Target rank
    * @param imm_data Immediate data to send
    * @param ch Channel index
    * @return Coroutine returning bytes written
    */
-  [[nodiscard]] Coro<ssize_t> Write(void* __restrict__ buffer, size_t len, uint64_t imm_data, size_t ch) {
-    const auto [addr, key] = GetRemoteAddr(ch, len);
-    return BufferType::Write(buffer, len, addr, key, imm_data, ch);
+  [[nodiscard]] Coro<ssize_t> Write(int rank, uint64_t imm_data, size_t ch) {
+    const auto& iov = GetRemoteRmaIov(rank, ch);
+    return BufferType::Write(iov.addr, iov.key, imm_data, ch);
   }
 
   /**
-   * @brief Write all data to remote buffer
-   * @param buffer Source buffer to write from
-   * @param len Number of bytes to write
+   * @brief Write all data to remote rank (single channel, handles large transfers)
+   * @param rank Target rank
    * @param imm_data Immediate data to send
    * @param ch Channel index
    * @return Coroutine returning bytes written
    */
-  [[nodiscard]] Coro<ssize_t> Writeall(void* __restrict__ buffer, size_t len, uint64_t imm_data, size_t ch) {
-    const auto [addr, key] = GetRemoteAddr(ch, len);
-    return BufferType::Writeall(buffer, len, addr, key, imm_data, ch);
+  [[nodiscard]] Coro<ssize_t> Writeall(int rank, uint64_t imm_data, size_t ch) {
+    const auto& iov = GetRemoteRmaIov(rank, ch);
+    return BufferType::Writeall(iov.addr, iov.key, imm_data, ch);
   }
 
   /**
-   * @brief Write data from internal buffer to remote buffer
-   * @param len Number of bytes to write
-   * @param imm_data Immediate data to send
-   * @param ch Channel index
-   * @return Coroutine returning bytes written
-   */
-  [[nodiscard]] Coro<ssize_t> Write(size_t len, uint64_t imm_data, size_t ch) {
-    const auto [addr, key] = GetRemoteAddr(ch, len);
-    return BufferType::Write(len, addr, key, imm_data, ch);
-  }
-
-  /**
-   * @brief Encode imm_data with channel index for unique identification
+   * @brief Encode immediate data with channel index
    * @param imm_data Base immediate data value
    * @param ch Channel index
    * @return Encoded immediate data with channel in lower 8 bits
@@ -83,20 +121,22 @@ class DeviceMemory : public BufferType, public detail::Selector {
   static constexpr uint64_t EncodeImmdata(uint64_t imm_data, size_t ch) noexcept { return (imm_data << 8) | (ch & 0xFF); }
 
   /**
-   * @brief Write all data from entire internal buffer to remote buffer using all channels
-   * Splits buffer across all available channels for maximum throughput
-   * Each channel sends channel-encoded imm_data to signal completion
-   * @param imm_data Immediate data to send (encoded with channel index per channel)
+   * @brief Write entire buffer to remote rank using all channels
+   *
+   * Splits buffer across all available channels for maximum throughput.
+   * Each channel sends channel-encoded imm_data to signal completion.
+   *
+   * @param rank Target rank
+   * @param imm_data Immediate data (encoded with channel index per channel)
    * @return Coroutine returning total bytes written
    */
-  [[nodiscard]] Coro<ssize_t> Writeall(uint64_t imm_data) {
+  [[nodiscard]] Coro<ssize_t> Writeall(int rank, uint64_t imm_data) {
     const size_t num_channels = this->channels_.size();
     const size_t total_size = this->Size();
     const size_t chunk_size = total_size / num_channels;
-    const auto& remote_rma = this->GetRemoteRMA();
+    const auto& remote_rma = GetRemoteRmaIovs(rank);
     char* data = static_cast<char*>(this->RdmaData());
 
-    // Launch all channels in parallel
     std::vector<Future<Coro<ssize_t>>> futures;
     futures.reserve(num_channels);
 
@@ -106,19 +146,15 @@ class DeviceMemory : public BufferType, public detail::Selector {
       auto* mr = this->mrs_[ch];
       auto addr = remote_rma[ch].addr + offset;
       auto key = remote_rma[ch].key;
-      uint64_t encoded_imm = EncodeImmdata(imm_data, ch);
-
-      futures.emplace_back(this->channels_[ch].Writeall(data + offset, len, mr, addr, key, encoded_imm));
+      futures.emplace_back(this->channels_[ch].Writeall(data + offset, len, mr, addr, key, EncodeImmdata(imm_data, ch)));
     }
 
-    // Wait for all channels to complete
     ssize_t total_written = 0;
     for (auto& fut : futures) {
       ssize_t written = co_await fut;
       if (written < 0) co_return written;
       total_written += written;
     }
-
     co_return total_written;
   }
 
@@ -129,147 +165,29 @@ class DeviceMemory : public BufferType, public detail::Selector {
    */
   [[nodiscard]] Coro<> WaitallImmdata(uint64_t imm_data) {
     for (size_t ch = 0; ch < this->channels_.size(); ++ch) {
-      uint64_t encoded_imm = EncodeImmdata(imm_data, ch);
-      co_await BufferType::WaitImmdata(encoded_imm);
+      co_await BufferType::WaitImmdata(EncodeImmdata(imm_data, ch));
     }
-  }
-
-  /**
-   * @brief Write entire internal buffer to remote buffer
-   * @param imm_data Immediate data to send
-   * @param ch Channel index
-   * @return Coroutine returning bytes written
-   */
-  [[nodiscard]] Coro<ssize_t> Write(uint64_t imm_data, size_t ch) {
-    const auto [addr, key] = GetRemoteAddr(ch, this->Size());
-    return BufferType::Write(addr, key, imm_data, ch);
-  }
-
-  /**
-   * @brief Write all data from internal buffer to remote buffer
-   * @param len Number of bytes to write
-   * @param imm_data Immediate data to send
-   * @param ch Channel index
-   * @return Coroutine returning bytes written
-   */
-  [[nodiscard]] Coro<ssize_t> Writeall(size_t len, uint64_t imm_data, size_t ch) {
-    const auto [addr, key] = GetRemoteAddr(ch, len);
-    return BufferType::Writeall(len, addr, key, imm_data, ch);
-  }
-
-  /**
-   * @brief Write all data from entire internal buffer to remote buffer
-   * @param imm_data Immediate data to send
-   * @param ch Channel index
-   * @return Coroutine returning bytes written
-   */
-  [[nodiscard]] Coro<ssize_t> Writeall(uint64_t imm_data, size_t ch) {
-    const auto [addr, key] = GetRemoteAddr(ch, this->Size());
-    return BufferType::Writeall(addr, key, imm_data, ch);
-  }
-
- public:
-  /**
-   * @brief Awaiter for retrieving and merging GPU device requests
-   *
-   * Groups requests by type, merges contiguous address ranges within each type,
-   * and returns the combined result when resumed.
-   */
-  struct DeviceRequestAwaiter {
-    DeviceMemory* memory;
-
-    constexpr bool await_ready() const noexcept { return false; }
-
-    /**
-     * @brief Merge contiguous requests by type and return combined result
-     * @return Vector of merged device requests
-     */
-    inline std::vector<DeviceRequest> await_resume() noexcept {
-      auto& reqs = memory->requests_;
-      if (reqs.empty()) return {};
-
-      std::sort(reqs.begin(), reqs.end(), [](const auto& a, const auto& b) { return std::tie(a.type, a.src) < std::tie(b.type, b.src); });
-
-      std::vector<DeviceRequest> result;
-      result.reserve(reqs.size());
-      result.push_back(std::move(reqs[0]));
-      for (size_t i = 1; i < reqs.size(); ++i) {
-        auto& last = result.back();
-        auto& cur = reqs[i];
-        if (cur.type == last.type && cur.addr == last.addr + last.size) {
-          last.size += cur.size;
-        } else {
-          result.push_back(std::move(cur));
-        }
-      }
-      reqs.clear();
-      return result;
-    }
-
-    /**
-     * @brief Suspend coroutine if no requests available
-     * @param coroutine Coroutine handle to suspend
-     * @return true if suspended, false if data ready
-     */
-    template <typename Promise>
-    inline bool await_suspend(std::coroutine_handle<Promise> coroutine) noexcept {
-      coroutine.promise().SetState(Handle::kSuspend);
-      if (!memory->requests_.empty()) return false;
-      memory->handle_ = &coroutine.promise();
-      return true;
-    }
-  };
-
-  /**
-   * @brief Get awaiter for device requests from GPU queue
-   * @return DeviceRequestAwaiter for co_await
-   */
-  [[nodiscard]] auto GetDeviceRequests() { return DeviceRequestAwaiter{this}; }
-
-  /**
-   * @brief Poll GPU queue and resume waiting coroutines
-   * @param duration Timeout duration (unused)
-   * @return Vector of events for ready coroutines
-   */
-  [[nodiscard]] std::vector<Event> Select(ms) override final {
-    DeviceRequest req;
-    while (queue_.Pop(req)) requests_.emplace_back(req);
-    if (requests_.empty() || !handle_) return {};
-    auto* h = handle_;
-    handle_ = nullptr;
-    return {{-1, 0, h}};
-  }
-
-  [[nodiscard]] bool Stopped() const noexcept override final { return false; }
-
- private:
-  /**
-   * @brief Get remote address and key for write operations
-   * @param ch Channel index
-   * @param len Length to validate
-   * @param offset Offset within the remote buffer (default: 0)
-   * @return Pair of remote address and key
-   */
-  [[nodiscard]] std::pair<uint64_t, uint64_t> GetRemoteAddr(size_t ch, size_t len, size_t offset = 0) const {
-    const auto& remote_rma_iov = this->GetRemoteRMA();
-    ASSERT(ch < remote_rma_iov.size());
-    const auto& rma_iov = remote_rma_iov[ch];
-    ASSERT(offset + len <= rma_iov.len);
-    return {rma_iov.addr + offset, rma_iov.key};
   }
 
  private:
-  Queue<DeviceRequest> queue_;
-  std::vector<DeviceRequest> requests_;
-  Handle* handle_ = nullptr;
+  int world_size_;                                 ///< Number of ranks in the world
+  std::vector<std::vector<fi_rma_iov>> rma_iovs_;  ///< 2D RMA IOVs: [rank][channel]
+  Queue<DeviceRequest> queue_;                     ///< GPU request queue
+  std::vector<DeviceRequest> requests_;            ///< Pending requests
+  Handle* handle_ = nullptr;                       ///< Waiting coroutine handle
 };
 
-/**
- * @brief Device buffer with DMABUF and RDMA write capabilities
- */
-using DeviceDMAMemory = DeviceMemory<DeviceDMABuffer>;
+/** @brief Symmetric memory with DMABUF for GPU direct access */
+using SymmetricDMAMemory = SymmetricMemory<DeviceDMABuffer>;
 
-/**
- * @brief Device buffer with pinned host memory and RDMA write capabilities
- */
-using DevicePinMemory = DeviceMemory<DevicePinBuffer>;
+/** @brief Symmetric memory with pinned host memory */
+using SymmetricPinMemory = SymmetricMemory<DevicePinBuffer>;
+
+/** @brief Symmetric memory with host memory */
+using SymmetricHostMemory = SymmetricMemory<HostBuffer>;
+
+/** @brief Alias for backward compatibility */
+using DeviceDMAMemory = SymmetricDMAMemory;
+
+/** @brief Alias for backward compatibility */
+using DevicePinMemory = SymmetricPinMemory;

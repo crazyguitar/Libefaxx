@@ -19,7 +19,7 @@ RunAll2allWriteMultiChannel(std::vector<std::unique_ptr<T>>& write_bufs, std::ve
   for (int peer = 0; peer < world_size; ++peer) {
     if (peer == rank) continue;
     rfuts.emplace_back(read_bufs[peer]->WaitallImmdata(peer + 1));
-    wfuts.emplace_back(write_bufs[peer]->Writeall(rank + 1));
+    wfuts.emplace_back(write_bufs[peer]->Writeall(peer, rank + 1));
   }
   for (auto& fut : wfuts) co_await fut;
   for (auto& fut : rfuts) co_await fut;
@@ -36,7 +36,7 @@ RunAll2allWrite(std::vector<std::unique_ptr<T>>& write_bufs, std::vector<std::un
   for (int peer = 0; peer < world_size; ++peer) {
     if (peer == rank) continue;
     rfuts.emplace_back(read_bufs[peer]->WaitImmdata(peer + 1));
-    wfuts.emplace_back(write_bufs[peer]->Write(rank + 1, channel));
+    wfuts.emplace_back(write_bufs[peer]->Write(peer, rank + 1, channel));
   }
   for (auto& fut : wfuts) co_await fut;
   for (auto& fut : rfuts) co_await fut;

@@ -19,7 +19,7 @@ struct Write {
   template <typename T>
   Coro<> operator()(Peer& peer, typename Peer::template Buffers<T>& write) {
     if (peer.mpi.GetWorldRank() != 0) co_return;
-    co_await write[target]->Write(1, channel);
+    co_await write[target]->Write(target, 1, channel);
   }
 };
 
@@ -33,7 +33,7 @@ struct WriteMulti {
   template <typename T>
   Coro<> operator()(Peer& peer, typename Peer::template Buffers<T>& write) {
     if (peer.mpi.GetWorldRank() != 0) co_return;
-    co_await write[target]->Writeall(1);
+    co_await write[target]->Writeall(target, 1);
   }
 };
 
@@ -100,12 +100,4 @@ struct PairWriteMulti {
       for (auto& efa : peer.efas) IO::Get().Quit<FabricProxy>(efa);
     }());
   }
-};
-
-/**
- * @brief No-op verification functor
- */
-struct NoVerify {
-  template <typename P, typename Buffers>
-  void operator()(P&, Buffers&) const {}
 };

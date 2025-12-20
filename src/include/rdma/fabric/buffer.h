@@ -308,13 +308,6 @@ class Buffer : private NoCopy {
  protected:
   Buffer(std::vector<Channel>& channels, size_t size) : channels_{channels}, size_{size} { ASSERT(size > 0); }
 
-  inline static std::vector<struct fi_rma_iov> Register(void* __restrict__ data, size_t size, std::vector<struct fid_mr*>& mrs) {
-    std::vector<struct fi_rma_iov> rma_iovs;
-    rma_iovs.reserve(mrs.size());
-    for (const auto& mr : mrs) rma_iovs.push_back({reinterpret_cast<uint64_t>(data), size, mr->key});
-    return rma_iovs;
-  }
-
   /**
    * @brief Align pointer to specified boundary
    * @param ptr Pointer to align
@@ -323,34 +316,22 @@ class Buffer : private NoCopy {
    */
   [[nodiscard]] static constexpr void* Align(void* ptr, size_t align) noexcept { return (void*)(((uintptr_t)ptr + align - 1) & ~(align - 1)); }
 
+  /**
+   * @brief Build RMA IOV from memory region
+   * @param data Buffer data pointer
+   * @param size Buffer size
+   * @param mr Memory region handle
+   * @return RMA IOV structure
+   */
+  [[nodiscard]] static fi_rma_iov MakeRmaIov(void* data, size_t size, fid_mr* mr) noexcept {
+    return {reinterpret_cast<uint64_t>(data), size, mr->key};
+  }
+
   std::vector<Channel>& channels_;
   std::vector<struct fid_mr*> mrs_;
-  std::vector<struct fi_rma_iov> rma_iovs_;
   size_t size_ = 0;
   void* raw_ = nullptr;
   void* data_ = nullptr;
-
- public:
-  /**
-   * @brief Set remote RMA IOVs for write operations
-   * @param remote_rma_iov Vector of remote RMA IOVs
-   */
-  void SetRemoteRMA(std::vector<fi_rma_iov> remote_rma_iov) noexcept { remote_rma_iov_ = std::move(remote_rma_iov); }
-
-  /**
-   * @brief Get remote RMA IOVs
-   * @return Reference to remote RMA IOVs vector
-   */
-  decltype(auto) GetRemoteRMA() const noexcept { return remote_rma_iov_; }
-
-  /**
-   * @brief Get local RMA IOVs
-   * @return Const reference to local RMA IOVs vector
-   */
-  decltype(auto) GetLocalRMA() const noexcept { return rma_iovs_; }
-
- private:
-  std::vector<fi_rma_iov> remote_rma_iov_;  ///< Remote RMA IOVs for write operations
 };
 
 /**
@@ -360,20 +341,30 @@ class Buffer : private NoCopy {
  */
 class HostBuffer : public Buffer {
  public:
+  static constexpr size_t kAlign = 128;
+
   /**
    * @brief Construct HostBuffer with host memory allocation
    * @param channels Channels for transferring data
+   * @param device CUDA device ID (ignored for host buffer)
    * @param size Buffer size in bytes
    * @param align Memory alignment in bytes (default: 128)
    */
-  HostBuffer(std::vector<Channel>& channels, size_t size, size_t align = kAlign) : Buffer(channels, size) {
+  HostBuffer(std::vector<Channel>& channels, int /*device*/, size_t size, size_t align = kAlign) : Buffer(channels, size) {
     ASSERT(align > 0 && (align & (align - 1)) == 0);
     raw_ = malloc(size + align - 1);
     ASSERT(raw_);
     data_ = Align(raw_, align);
     mrs_ = Register(channels_, data_, size_);
-    rma_iovs_ = Buffer::Register(data_, size_, mrs_);
   }
+
+  /**
+   * @brief Construct HostBuffer without device parameter (legacy)
+   * @param channels Channels for transferring data
+   * @param size Buffer size in bytes
+   * @param align Memory alignment in bytes (default: 128)
+   */
+  HostBuffer(std::vector<Channel>& channels, size_t size, size_t align = kAlign) : HostBuffer(channels, 0, size, align) {}
 
   ~HostBuffer() override {
     for (auto mr : mrs_) fi_close((fid_t)mr);
@@ -385,8 +376,6 @@ class HostBuffer : public Buffer {
   }
 
  protected:
-  static constexpr size_t kAlign = 128;
-
   /**
    * @brief Register host buffer with RDMA domain
    * @param channel Channel to register with
@@ -462,7 +451,6 @@ class DeviceDMABuffer : public Buffer {
     ASSERT(dmabuf_fd_ != -1);
     try {
       mrs_ = Register(channels_, data_, size_, dmabuf_fd_, device_);
-      rma_iovs_ = Buffer::Register(data_, size_, mrs_);
     } catch (...) {
       close(dmabuf_fd_);
       cudaFree(raw_);
@@ -757,32 +745,6 @@ class DevicePinBuffer : public Buffer {
     return mrs;
   }
 
-  /**
-   * @brief Register pinned host memory with single channel (auto-detect device)
-   * @param channel Channel to register with
-   * @param data CPU-accessible pinned host memory pointer
-   * @param size Buffer size in bytes
-   * @return Memory region handle
-   */
-  inline static struct fid_mr* Register(Channel& channel, void* __restrict__ data, size_t size) {
-    int device = 0;
-    CUDA_CHECK(cudaGetDevice(&device));
-    return Register(channel, data, size, device);
-  }
-
-  /**
-   * @brief Register pinned host memory with multiple channels (auto-detect device)
-   * @param channels Vector of channels to register with
-   * @param data CPU-accessible pinned host memory pointer
-   * @param size Buffer size in bytes
-   * @return Vector of memory region handles
-   */
-  inline static std::vector<struct fid_mr*> Register(std::vector<Channel>& channels, void* __restrict__ data, size_t size) {
-    int device = 0;
-    CUDA_CHECK(cudaGetDevice(&device));
-    return Register(channels, data, size, device);
-  }
-
  private:
   /**
    * @brief Allocate GPU memory and set up CUDA mapping
@@ -808,7 +770,6 @@ class DevicePinBuffer : public Buffer {
     CUDA_CHECK(cudaHostGetDevicePointer(&data_, mapped_data_, 0));
 
     mrs_ = Register(channels_, mapped_data_, size_, device_);
-    rma_iovs_ = Buffer::Register(mapped_data_, size_, mrs_);
   }
 
   /**
