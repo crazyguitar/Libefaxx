@@ -17,6 +17,7 @@ struct PairVerifyGPU {
   template <typename P, typename Buffers>
   void operator()(P& peer, Buffers& recv) const {
     const auto rank = peer.mpi.GetWorldRank();
+    if (rank != 0 && rank != target) return;  // Only participating ranks verify
     const int peer_rank = (rank == 0) ? target : 0;
     const size_t buf_size = recv[peer_rank]->Size();
     const size_t num_ints = buf_size / sizeof(int);
@@ -32,6 +33,7 @@ struct PairVerifyCPU {
   template <typename P, typename Buffers>
   void operator()(P& peer, Buffers& recv) const {
     const auto rank = peer.mpi.GetWorldRank();
+    if (rank != 0 && rank != target) return;  // Only participating ranks verify
     const int peer_rank = (rank == 0) ? target : 0;
     const size_t buf_size = recv[peer_rank]->Size();
     const size_t num_ints = buf_size / sizeof(int);
