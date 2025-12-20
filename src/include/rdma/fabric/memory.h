@@ -196,7 +196,7 @@ class DeviceMemory : public BufferType, public detail::Selector {
       for (size_t i = 1; i < reqs.size(); ++i) {
         auto& last = result.back();
         auto& cur = reqs[i];
-        if (cur.type == last.type && cur.src == last.src + last.size && cur.dst == last.dst + last.size) {
+        if (cur.type == last.type && cur.addr == last.addr + last.size) {
           last.size += cur.size;
         } else {
           result.push_back(std::move(cur));
