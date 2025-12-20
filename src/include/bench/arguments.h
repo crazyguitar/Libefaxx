@@ -1,30 +1,47 @@
+/**
+ * @file arguments.h
+ * @brief Command-line argument parsing for benchmarks
+ */
 #pragma once
 
 #include <getopt.h>
 
+#include <cstdio>
 #include <iostream>
+#include <string>
 #include <vector>
 
+/**
+ * @brief Benchmark configuration options
+ */
 struct Options {
-  size_t minbytes = 4 * 1024 * 1024;    // 8M
-  size_t maxbytes = 128 * 1024 * 1024;  // 64M
-  size_t stepbytes = 2;                 // multiply factor
-  int repeat = 1024;
-  int warmup = 8;
+  size_t minbytes = 8 * 1024 * 1024;     ///< Minimum buffer size (default: 8M)
+  size_t maxbytes = 1024 * 1024 * 1024;  ///< Maximum buffer size (default: 1G)
+  size_t stepbytes = 2;                  ///< Step multiply factor (default: 2)
+  int repeat = 1024;                     ///< Benchmark iterations (default: 1024)
+  int warmup = 8;                        ///< Warmup iterations (default: 8)
 };
 
+/**
+ * @brief Print usage information
+ * @param prog Program name
+ */
 inline void usage(const char* prog) {
   std::cout << "Usage: " << prog << " [OPTIONS]\n"
             << "Options:\n"
             << "  -h, --help              Show this help message\n"
-            << "  -b, --minbytes=SIZE     Minimum buffer size (default: 4M)\n"
-            << "  -e, --maxbytes=SIZE     Maximum buffer size (default: 128M)\n"
+            << "  -b, --minbytes=SIZE     Minimum buffer size (default: 8M)\n"
+            << "  -e, --maxbytes=SIZE     Maximum buffer size (default: 1G)\n"
             << "  -i, --stepbytes=FACTOR  Step factor (default: 2, multiply)\n"
             << "  -r, --repeat=N          Number of benchmark iterations (default: 1024)\n"
             << "  -w, --warmup=N          Number of warmup iterations (default: 8)\n";
 }
 
-/// Parse size string with K/M/G suffix
+/**
+ * @brief Parse size string with K/M/G suffix
+ * @param str Size string (e.g., "128K", "8M", "1G")
+ * @return Size in bytes
+ */
 inline size_t parse_size(const char* str) {
   char* end;
   size_t val = std::strtoull(str, &end, 10);
@@ -37,6 +54,12 @@ inline size_t parse_size(const char* str) {
   return val;
 }
 
+/**
+ * @brief Parse command-line arguments
+ * @param argc Argument count
+ * @param argv Argument values
+ * @return Parsed options
+ */
 inline Options parse_args(int argc, char* argv[]) {
   Options opts;
   static struct option long_opts[] = {
@@ -48,7 +71,6 @@ inline Options parse_args(int argc, char* argv[]) {
       {"warmup", required_argument, nullptr, 'w'},
       {nullptr, 0, nullptr, 0}
   };
-
   int opt;
   while ((opt = getopt_long(argc, argv, "hb:e:i:r:w:", long_opts, nullptr)) != -1) {
     switch (opt) {
@@ -78,34 +100,14 @@ inline Options parse_args(int argc, char* argv[]) {
   return opts;
 }
 
-/// Generate list of sizes from min to max with step factor
+/**
+ * @brief Generate list of sizes from min to max with step factor
+ * @param opts Benchmark options
+ * @return Vector of buffer sizes to test
+ */
 inline std::vector<size_t> generate_sizes(const Options& opts) {
   std::vector<size_t> sizes;
-  for (size_t s = opts.minbytes; s <= opts.maxbytes; s *= opts.stepbytes) {
-    sizes.push_back(s);
-  }
-  if (sizes.empty() || sizes.back() < opts.maxbytes) {
-    sizes.push_back(opts.maxbytes);
-  }
+  for (size_t s = opts.minbytes; s <= opts.maxbytes; s *= opts.stepbytes) sizes.push_back(s);
+  if (sizes.empty() || sizes.back() < opts.maxbytes) sizes.push_back(opts.maxbytes);
   return sizes;
-}
-
-/// Format size with appropriate unit
-inline std::string format_size(size_t bytes) {
-  char buf[32];
-  if (bytes >= 1024 * 1024 * 1024)
-    snprintf(buf, sizeof(buf), "%zuG", bytes / (1024 * 1024 * 1024));
-  else if (bytes >= 1024 * 1024)
-    snprintf(buf, sizeof(buf), "%zuM", bytes / (1024 * 1024));
-  else if (bytes >= 1024)
-    snprintf(buf, sizeof(buf), "%zuK", bytes / 1024);
-  else
-    snprintf(buf, sizeof(buf), "%zuB", bytes);
-  return buf;
-}
-
-/// Print benchmark results table header
-inline void print_table_header() {
-  printf("\n%12s %20s %20s %20s %20s\n", "Size", "SingleDMA(Gbps)", "MultiDMA(Gbps)", "SinglePin(Gbps)", "MultiPin(Gbps)");
-  printf("%s\n", std::string(100, '-').c_str());
 }

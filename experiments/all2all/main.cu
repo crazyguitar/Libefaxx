@@ -5,11 +5,11 @@
  * Measures RDMA write bandwidth using all-to-all communication pattern.
  * Tests single/multi channel with DMA and pinned memory.
  */
-#include <all2all/arguments.h>
+#include <bench/arguments.h>
 #include <rdma/fabric/memory.h>
 #include <rdma/proxy.h>
 
-#include <all2all/all2all.cuh>
+#include <bench/modules/all2all.cuh>
 #include <bench/mpi/fabric.cuh>
 
 /** @brief Bandwidth type tags */
@@ -67,10 +67,10 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
   return results;
 }
 
-using SingleDMA = Test<DeviceDMAMemory, All2all, SingleLinkBW>;
-using MultiDMA = Test<DeviceDMAMemory, All2allMulti, TotalLinkBW>;
-using SinglePin = Test<DevicePinMemory, All2all, SingleLinkBW>;
-using MultiPin = Test<DevicePinMemory, All2allMulti, TotalLinkBW>;
+using SingleDMA = Test<SymmetricDMAMemory, All2all, SingleLinkBW>;
+using MultiDMA = Test<SymmetricDMAMemory, All2allMulti, TotalLinkBW>;
+using SinglePin = Test<SymmetricPinMemory, All2all, SingleLinkBW>;
+using MultiPin = Test<SymmetricPinMemory, All2allMulti, TotalLinkBW>;
 
 int main(int argc, char* argv[]) {
   try {
@@ -89,12 +89,10 @@ int main(int argc, char* argv[]) {
     }
 
     if (rank == 0) {
-      PrintBenchHeader(
+      FabricBench::Print(
           "EFA RDMA Write Benchmark", nranks, opts.warmup, opts.repeat, single_bw, "all-to-all RDMA write",
-          {"SingleDMA", "MultiDMA", "SinglePin", "MultiPin"}
+          {"SingleDMA", "MultiDMA", "SinglePin", "MultiPin"}, results
       );
-      for (const auto& r : results) PrintBenchResult(r);
-      PrintBenchFooter();
     }
     return 0;
   } catch (const std::exception& e) {

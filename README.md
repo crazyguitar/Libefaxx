@@ -44,12 +44,12 @@ enroot start --mount /fsx:/fsx cuda /bin/bash
 
 # run a test via enroot on a Slurm cluster
 srun -N 1 \
-  --container-image ${PWD}/cuda+latest.sqsh  \
+  --container-image "${PWD}/cuda+latest.sqsh"  \
   --container-mounts /fsx:/fsx \
   --container-name cuda \
   --mpi=pmix \
   --ntasks-per-node=1 \
-  build/experiments/affinity/affinity
+  "${PWD}/build/experiments/affinity/affinity"
 ```
 
 ## Example
@@ -67,21 +67,20 @@ The example below shows how to build a PoC using pure [libfabric](https://github
 #include <bench/mpi/fabric.cuh>
 
 struct PairBench {
+  int target;
   template <typename T>
   void operator()(FabricBench& peer, FabricBench::Buffers<T>& send, FabricBench::Buffers<T>& recv) {
-    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<FabricProxy>(efa);
     Run([&]() -> Coro<> {
       size_t channel = 0;
       if (peer.mpi.GetWorldRank() == 0) {
-        for (int i = 1; i < peer.mpi.GetWorldSize(); ++i) {
-          co_await send[i]->Sendall(channel);
-          co_await recv[i]->Recvall(channel);
-        }
-      } else {
+        co_await send[target]->Sendall(channel);
+        co_await recv[target]->Recvall(channel);
+      } else if (peer.mpi.GetWorldRank() == target) {
         co_await recv[0]->Recvall(channel);
         co_await send[0]->Sendall(channel);
       }
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<FabricProxy>(efa);
     }());
   }
 };
@@ -96,18 +95,20 @@ struct Test {
     int world = peer.mpi.GetWorldSize();
     auto send = peer.Alloc<BufType>(size, rank);
     auto recv = peer.Alloc<BufType>(size, -1);
-    auto noop = [](auto x, auto y) {};
-    return peer.Bench(send, recv, PairBench{}, noop, 100);
+    auto noop = [](auto&, auto&) {};
+    std::vector<BenchResult> res;
+    for (int t = 1; t < world; ++t) res.emplace_back(peer.Bench(send, recv, PairBench{t}, noop, 100));
+    return res;
   }
 };
 
-using DeviceTest = Test<DeviceDMAMemory>;
+using DeviceTest = Test<SymmetricDMAMemory>;
 
 // mpirun -np 2 --npernode 1 example
 
 int main(int argc, char *argv[]) {
   size_t bufsize = 128 << 10; // 128k
-  DeviceTest::Run(bufsize);
+  auto results = DeviceTest::Run(bufsize);
   return 0;
 }
 ```

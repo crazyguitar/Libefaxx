@@ -2,7 +2,7 @@
 #include <io/common.h>
 #include <affinity/taskset.h>
 #include <rdma/fabric/efa.h>
-#include <rdma/fabric/buffer.h>
+#include <rdma/fabric/memory.h>
 #include <bootstrap/mpi/fabric.h>
 #include <affinity/affinity.h>
 #include <device/common.cuh>
@@ -22,15 +22,14 @@ struct FabricPeer : public Peer {
     SPDLOG_INFO("Rank {}: Connect", rank);
     Connect();
     SPDLOG_INFO("Rank {}: Handshake", rank);
-    std::vector<std::unique_ptr<HostBuffer>> write_buffers(world_size);
-    std::vector<std::unique_ptr<HostBuffer>> read_buffers(world_size);
+    std::vector<std::unique_ptr<SymmetricHostMemory>> write_buffers(world_size);
+    std::vector<std::unique_ptr<SymmetricHostMemory>> read_buffers(world_size);
     for (int i = 0; i < world_size; ++i) {
       if (i == rank) continue;
-      write_buffers[i] = std::make_unique<HostBuffer>(channels[i], 1024);
-      read_buffers[i] = std::make_unique<HostBuffer>(channels[i], 1024);
+      write_buffers[i] = std::make_unique<SymmetricHostMemory>(channels[i], device, 1024, world_size);
+      read_buffers[i] = std::make_unique<SymmetricHostMemory>(channels[i], device, 1024, world_size);
     }
     Handshake(write_buffers, read_buffers);
-
     SPDLOG_INFO("Rank {}: Bootstrap complete", rank);
   }
 

@@ -6,6 +6,7 @@
 
 #include <bootstrap/mpi/fabric.h>
 #include <io/progress.h>
+#include <rdma/fabric/memory.h>
 
 #include <chrono>
 #include <device/common.cuh>
@@ -14,10 +15,10 @@
  * @brief Result from a single benchmark run
  */
 struct BenchResult {
-  size_t size;    /**< Buffer size in bytes */
-  double time_us; /**< Average time per iteration in microseconds */
-  double bw_gbps; /**< Achieved bandwidth in Gbps */
-  double bus_bw;  /**< Bus bandwidth utilization ratio */
+  size_t size;     ///< Buffer size in bytes
+  double time_us;  ///< Average time per iteration in microseconds
+  double bw_gbps;  ///< Achieved bandwidth in Gbps
+  double bus_bw;   ///< Bus bandwidth utilization ratio
 };
 
 /**
@@ -32,21 +33,34 @@ __global__ void InitBufferKernel(int* __restrict__ data, size_t len, int value) 
 }
 
 /**
- * @brief Create buffer for GPU memory types
+ * @brief Create buffer for SymmetricMemory types
  * @param c Channel vector for registration
  * @param device CUDA device ID
  * @param size Buffer size in bytes
+ * @param world_size Number of ranks
  * @return Unique pointer to created buffer
  */
 template <typename T>
-std::unique_ptr<T> MakeBuffer(std::vector<Channel>& c, int device, size_t size) {
-  return std::make_unique<T>(c, device, size);
+std::unique_ptr<T> MakeBuffer(std::vector<Channel>& c, int device, size_t size, int world_size) {
+  return std::make_unique<T>(c, size, world_size, device);
 }
 
-/** @brief Create buffer specialization for HostBuffer (no device needed) */
+/** @brief Create buffer specialization for raw HostBuffer */
 template <>
-inline std::unique_ptr<HostBuffer> MakeBuffer(std::vector<Channel>& c, int, size_t size) {
-  return std::make_unique<HostBuffer>(c, size);
+inline std::unique_ptr<HostBuffer> MakeBuffer(std::vector<Channel>& c, int device, size_t size, int) {
+  return std::make_unique<HostBuffer>(c, device, size);
+}
+
+/** @brief Create buffer specialization for raw DeviceDMABuffer */
+template <>
+inline std::unique_ptr<DeviceDMABuffer> MakeBuffer(std::vector<Channel>& c, int device, size_t size, int) {
+  return std::make_unique<DeviceDMABuffer>(c, device, size);
+}
+
+/** @brief Create buffer specialization for raw DevicePinBuffer */
+template <>
+inline std::unique_ptr<DevicePinBuffer> MakeBuffer(std::vector<Channel>& c, int device, size_t size, int) {
+  return std::make_unique<DevicePinBuffer>(c, device, size);
 }
 
 /**
@@ -69,6 +83,13 @@ void InitBuffer(T* buf, size_t num_ints, int value, cudaStream_t stream) {
 /** @brief Initialize buffer specialization for HostBuffer (CPU loop) */
 template <>
 inline void InitBuffer(HostBuffer* buf, size_t num_ints, int value, cudaStream_t) {
+  int* data = reinterpret_cast<int*>(buf->Data());
+  for (size_t i = 0; i < num_ints; ++i) data[i] = value;
+}
+
+/** @brief Initialize buffer specialization for SymmetricHostMemory (CPU loop) */
+template <>
+inline void InitBuffer(SymmetricHostMemory* buf, size_t num_ints, int value, cudaStream_t) {
   int* data = reinterpret_cast<int*>(buf->Data());
   for (size_t i = 0; i < num_ints; ++i) data[i] = value;
 }
@@ -154,11 +175,17 @@ struct VerifyCPU {
   }
 };
 
+/** @brief No-op verification functor */
+struct NoVerify {
+  template <typename P, typename Buffers>
+  void operator()(P&, Buffers&) const {}
+};
+
 /**
  * @brief RDMA peer with CUDA stream and benchmarking support
  *
  * Extends Peer with buffer allocation, warmup, and timed benchmarking.
- * @tparam T Buffer type (e.g., DeviceDMAMemory, HostBuffer)
+ * @tparam T Buffer type (e.g., SymmetricDMAMemory, HostBuffer)
  * @tparam F Communication functor (e.g., All2all)
  * @tparam V Verification functor (VerifyGPU or VerifyCPU)
  */
@@ -188,7 +215,7 @@ class FabricBench : public Peer {
     int value = (init_value == -1) ? rank : init_value;
     for (int i = 0; i < world_size; ++i) {
       if (i == rank) continue;
-      buffers[i] = MakeBuffer<T>(channels[i], device, size);
+      buffers[i] = MakeBuffer<T>(channels[i], device, size, world_size);
       InitBuffer(buffers[i].get(), num_ints, value, stream);
     }
     return buffers;
@@ -253,52 +280,45 @@ class FabricBench : public Peer {
     verify(*this, b);
     return {buf_size, avg_us, bw_gbps, bus_bw};
   }
+
+  /**
+   * @brief Print complete benchmark summary
+   * @tparam N Number of results per row
+   * @param title Benchmark title/name
+   * @param nranks Number of MPI ranks
+   * @param warmup Number of warmup iterations
+   * @param iters Number of benchmark iterations
+   * @param link_bw Theoretical link bandwidth in Gbps
+   * @param pattern Description of communication pattern
+   * @param columns Column names for results
+   * @param results Vector of result arrays to print
+   */
+  template <size_t N>
+  static void Print(
+      const char* title,
+      int nranks,
+      int warmup,
+      int iters,
+      double link_bw,
+      const char* pattern,
+      const std::vector<std::string>& columns,
+      const std::vector<std::array<BenchResult, N>>& results
+  ) {
+    printf("#\n# %s\n#\n", title);
+    printf("# nranks: %d\n", nranks);
+    printf("# warmup iters: %d\n", warmup);
+    printf("# bench iters: %d\n", iters);
+    printf("# link bandwidth: %.0f Gbps\n#\n", link_bw);
+    if (pattern) printf("# Pattern: %s\n#\n", pattern);
+    printf("# BusBW: Percentage of theoretical link bandwidth achieved\n#\n");
+    printf("%12s %12s", "size", "count");
+    for (const auto& col : columns) printf(" %14s %10s", col.c_str(), "BusBW(%)");
+    printf("\n");
+    for (const auto& r : results) {
+      printf("%12zu %12zu", r[0].size, r[0].size / sizeof(float));
+      for (const auto& v : r) printf(" %14.2f %10.1f", v.bw_gbps, v.bus_bw);
+      printf("\n");
+    }
+    printf("#\n# Benchmark complete.\n");
+  }
 };
-
-/**
- * @brief Print benchmark header with configuration info
- * @param title Benchmark title/name
- * @param nranks Number of MPI ranks
- * @param warmup Number of warmup iterations
- * @param iters Number of benchmark iterations
- * @param link_bw Theoretical link bandwidth in Gbps
- * @param pattern Description of communication pattern
- * @param columns Column names for results
- */
-inline void
-PrintBenchHeader(const char* title, int nranks, int warmup, int iters, double link_bw, const char* pattern, const std::vector<std::string>& columns) {
-  printf("#\n");
-  printf("# %s\n", title);
-  printf("#\n");
-  printf("# nranks: %d\n", nranks);
-  printf("# warmup iters: %d\n", warmup);
-  printf("# bench iters: %d\n", iters);
-  printf("# link bandwidth: %.0f Gbps\n", link_bw);
-  printf("#\n");
-  if (pattern) printf("# Pattern: %s\n#\n", pattern);
-  printf("# BusBW: Percentage of theoretical link bandwidth achieved\n");
-  printf("#\n");
-  printf("%12s %12s", "size", "count");
-  for (const auto& col : columns) printf(" %14s %10s", col.c_str(), "BusBW(%)");
-  printf("\n");
-}
-
-/**
- * @brief Print benchmark result row for multiple results
- * @tparam N Number of results
- * @param results Array of BenchResult to print
- */
-template <size_t N>
-inline void PrintBenchResult(const std::array<BenchResult, N>& results) {
-  printf("%12zu %12zu", results[0].size, results[0].size / sizeof(float));
-  for (const auto& r : results) printf(" %14.2f %10.1f", r.bw_gbps, r.bus_bw);
-  printf("\n");
-}
-
-/**
- * @brief Print benchmark footer
- */
-inline void PrintBenchFooter() {
-  printf("#\n");
-  printf("# Benchmark complete.\n");
-}

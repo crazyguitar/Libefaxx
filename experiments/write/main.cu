@@ -5,13 +5,30 @@
  * Measures RDMA write bandwidth between rank 0 and all other ranks.
  * Pattern: rank0 -> rank_k (k=1..N-1), results averaged across all pairs.
  */
-#include <write/arguments.h>
+#include <bench/arguments.h>
+#include <rdma/fabric/memory.h>
 
-#include <write/write.cuh>
+#include <bench/modules/write.cuh>
+#include <bench/mpi/fabric.cuh>
 
 /** @brief Bandwidth type tags */
 struct SingleLinkBW {};
 struct TotalLinkBW {};
+
+/** @brief Pair-aware verification for RDMA write (only target receives) */
+struct WriteVerifyGPU {
+  int target;
+  template <typename P, typename Buffers>
+  void operator()(P& peer, Buffers& read) const {
+    const auto rank = peer.mpi.GetWorldRank();
+    if (rank != target) return;  // Only target verifies
+    const size_t buf_size = read[0]->Size();
+    const size_t num_ints = buf_size / sizeof(int);
+    std::vector<int> host_buf(num_ints);
+    CUDA_CHECK(cudaMemcpy(host_buf.data(), read[0]->Data(), buf_size, cudaMemcpyDeviceToHost));
+    if (VerifyBufferData(host_buf, 0, rank, 0) > 0) throw std::runtime_error("Verification failed");
+  }
+};
 
 /**
  * @brief Test configuration for single channel
@@ -24,7 +41,6 @@ struct Test {
     peer.Connect();
     int rank = peer.mpi.GetWorldRank();
     int world = peer.mpi.GetWorldSize();
-    size_t num_ints = size / sizeof(int);
 
     auto [write, read] = peer.AllocPair<BufType>(size);
     peer.Handshake(write, read);
@@ -32,9 +48,8 @@ struct Test {
     double sum_bw = 0;
     double sum_time = 0;
     for (int t = 1; t < world; ++t) {
-      if (rank == 0) RandInit(write[t].get(), num_ints, peer.stream);
-      peer.Warmup(write, read, PairWrite{t, 0}, NoVerify{}, opts.warmup);
-      auto r = peer.Bench(write, read, PairWrite{t, 0}, NoVerify{}, opts.repeat);
+      peer.Warmup(write, read, PairWrite<FabricBench>{t, 0}, WriteVerifyGPU{t}, opts.warmup);
+      auto r = peer.Bench(write, read, PairWrite<FabricBench>{t, 0}, WriteVerifyGPU{t}, opts.repeat);
       sum_bw += r.bw_gbps;
       sum_time += r.time_us;
     }
@@ -57,7 +72,6 @@ struct TestMulti {
     peer.Connect();
     int rank = peer.mpi.GetWorldRank();
     int world = peer.mpi.GetWorldSize();
-    size_t num_ints = size / sizeof(int);
 
     auto [write, read] = peer.AllocPair<BufType>(size);
     peer.Handshake(write, read);
@@ -65,9 +79,8 @@ struct TestMulti {
     double sum_bw = 0;
     double sum_time = 0;
     for (int t = 1; t < world; ++t) {
-      if (rank == 0) RandInit(write[t].get(), num_ints, peer.stream);
-      peer.Warmup(write, read, PairWriteMulti{t}, NoVerify{}, opts.warmup);
-      auto r = peer.Bench(write, read, PairWriteMulti{t}, NoVerify{}, opts.repeat);
+      peer.Warmup(write, read, PairWriteMulti<FabricBench>{t}, WriteVerifyGPU{t}, opts.warmup);
+      auto r = peer.Bench(write, read, PairWriteMulti<FabricBench>{t}, WriteVerifyGPU{t}, opts.repeat);
       sum_bw += r.bw_gbps;
       sum_time += r.time_us;
     }
@@ -87,9 +100,9 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
   return results;
 }
 
-using SinglePin = Test<DevicePinMemory, SingleLinkBW>;
-using SingleDMA = Test<DeviceDMAMemory, SingleLinkBW>;
-using MultiDMA = TestMulti<DeviceDMAMemory, TotalLinkBW>;
+using SinglePin = Test<SymmetricPinMemory, SingleLinkBW>;
+using SingleDMA = Test<SymmetricDMAMemory, SingleLinkBW>;
+using MultiDMA = TestMulti<SymmetricDMAMemory, TotalLinkBW>;
 
 int main(int argc, char* argv[]) {
   try {
@@ -108,12 +121,10 @@ int main(int argc, char* argv[]) {
     }
 
     if (rank == 0) {
-      PrintBenchHeader(
+      FabricBench::Print(
           "EFA Write Benchmark", nranks, opts.warmup, opts.repeat, single_bw, "rank0 -> rank_k (k=1..N-1), averaged across all pairs",
-          {"SinglePin", "SingleDMA", "MultiDMA"}
+          {"SinglePin", "SingleDMA", "MultiDMA"}, results
       );
-      for (const auto& r : results) PrintBenchResult(r);
-      PrintBenchFooter();
     }
     return 0;
   } catch (const std::exception& e) {

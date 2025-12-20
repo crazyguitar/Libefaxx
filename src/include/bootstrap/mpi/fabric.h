@@ -85,9 +85,36 @@ class Peer : private NoCopy {
   }
 
   /**
-   * @brief Exchange RMA keys for RDMA write operations
-   * @param write_bufs Write buffers to set remote RMA keys on
-   * @param read_bufs Read buffers to exchange local RMA keys from
+   * @brief Exchange RMA keys for a single buffer set (symmetric pattern)
+   *
+   * Each buffer exchanges its own RMA info with the corresponding peer buffer.
+   *
+   * @tparam T Buffer type (must have GetLocalRmaIovs and SetRemoteRmaIovs)
+   * @param bufs Buffer set to exchange keys for
+   */
+  template <typename T>
+  void Handshake(Buffers<T>& bufs) {
+    const auto world_size = mpi.GetWorldSize();
+    const auto rank = mpi.GetWorldRank();
+    for (int peer = 0; peer < world_size; ++peer) {
+      if (peer == rank) continue;
+      const auto local_rma = bufs[peer]->GetLocalRmaIovs();
+      const size_t sz = local_rma.size() * sizeof(struct fi_rma_iov);
+      std::vector<struct fi_rma_iov> peer_iovs(local_rma.size());
+      MPI_Sendrecv(local_rma.data(), sz, MPI_BYTE, peer, 0, peer_iovs.data(), sz, MPI_BYTE, peer, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      bufs[peer]->SetRemoteRmaIovs(peer, peer_iovs);
+    }
+  }
+
+  /**
+   * @brief Exchange RMA keys for write/read buffer pair
+   *
+   * For RDMA write: write_bufs[peer] writes to peer's read_bufs[rank].
+   * Exchanges read buffer RMA info and sets it on write buffers.
+   *
+   * @tparam T Buffer type
+   * @param write_bufs Write buffers (receives remote read buffer RMA info)
+   * @param read_bufs Read buffers (sends local RMA info)
    */
   template <typename T>
   void Handshake(Buffers<T>& write_bufs, Buffers<T>& read_bufs) {
@@ -95,11 +122,11 @@ class Peer : private NoCopy {
     const auto rank = mpi.GetWorldRank();
     for (int peer = 0; peer < world_size; ++peer) {
       if (peer == rank) continue;
-      const auto& local_rma = read_bufs[peer]->GetLocalRMA();
+      const auto local_rma = read_bufs[peer]->GetLocalRmaIovs();
       const size_t sz = local_rma.size() * sizeof(struct fi_rma_iov);
       std::vector<struct fi_rma_iov> peer_iovs(local_rma.size());
       MPI_Sendrecv(local_rma.data(), sz, MPI_BYTE, peer, 0, peer_iovs.data(), sz, MPI_BYTE, peer, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-      write_bufs[peer]->SetRemoteRMA(peer_iovs);
+      write_bufs[peer]->SetRemoteRmaIovs(peer, peer_iovs);
     }
   }
 

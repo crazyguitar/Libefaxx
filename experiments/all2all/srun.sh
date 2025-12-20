@@ -13,4 +13,4 @@ srun --container-image "${sqsh}" \
   --container-name efa \
   --mpi=pmix \
   --ntasks-per-node=1 \
-  "${binary}"
+  "${binary}" -b 4M -e 128M
