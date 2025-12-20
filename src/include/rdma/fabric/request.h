@@ -5,7 +5,10 @@
 #include <tuple>
 #include <vector>
 
-enum class DeviceRequestType : uint32_t { kPut = 0, kGet = 1, kCount = 2 };
+template <typename T>
+struct Queue;
+
+enum class DeviceRequestType : uint32_t { kPut = 0, kGet = 1, kFence = 2, kCount = 3 };
 
 struct DeviceRequest {
   uint64_t type;
@@ -13,6 +16,13 @@ struct DeviceRequest {
   uint64_t size;
   uint64_t addr;
   uint64_t imm;
+};
+
+/** @brief Context for GPU kernel to access queue and counters */
+struct DeviceContext {
+  Queue<DeviceRequest>* queue;
+  uint64_t* posted;
+  uint64_t* completed;
 };
 
 /** @brief Merge contiguous device requests by (rank, type, addr) */
@@ -35,3 +45,25 @@ static inline std::vector<DeviceRequest> Merge(std::vector<DeviceRequest>& reqs)
   reqs.clear();
   return result;
 }
+
+#ifdef __CUDACC__
+/**
+ * @brief GPU-side memory fence - ensures visibility across system
+ */
+__device__ __forceinline__ void Fence() { __threadfence_system(); }
+
+/**
+ * @brief GPU-side quiet - wait for all posted operations to complete
+ * @param posted Pointer to posted counter
+ * @param completed Pointer to completed counter
+ *
+ * Spins until completed >= posted, ensuring all outstanding operations finish.
+ */
+__device__ __forceinline__ void Quiet(uint64_t* posted, uint64_t* completed) {
+  uint64_t expected = *posted;
+  while (*completed < expected) {
+    __threadfence_system();
+  }
+  __threadfence_system();
+}
+#endif

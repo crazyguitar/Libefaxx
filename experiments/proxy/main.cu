@@ -13,7 +13,7 @@
 #include <bench/mpi/fabric.cuh>
 
 /** @brief CUDA kernel to push write request to queue */
-__global__ void ProxyKernel(Queue<DeviceRequest>* queue, int rank, size_t size, void* addr, uint64_t imm) {
+__global__ void ProxyKernel(DeviceContext ctx, int rank, size_t size, void* addr, uint64_t imm) {
   DeviceRequest req{
       .type = static_cast<uint64_t>(DeviceRequestType::kPut),
       .rank = static_cast<uint64_t>(rank),
@@ -21,7 +21,10 @@ __global__ void ProxyKernel(Queue<DeviceRequest>* queue, int rank, size_t size, 
       .addr = reinterpret_cast<uint64_t>(addr),
       .imm = imm
   };
-  queue->Push(req);
+  ctx.queue->Push(req);
+  atomicAdd(reinterpret_cast<unsigned long long*>(ctx.posted), 1ULL);
+  Fence();
+  Quiet(ctx.posted, ctx.completed);
 }
 
 /**
@@ -33,27 +36,44 @@ struct ProxyWrite {
   int channel;
 
   template <typename T>
-  void operator()(Peer& peer, typename Peer::template Buffers<T>& write, typename Peer::template Buffers<T>& read) {
-    int rank = peer.mpi.GetWorldRank();
-
-    if (rank == 0) {
-      auto* queue = write[target]->GetQueue();
-      void* addr = write[target]->Data();
-      size_t size = write[target]->Size();
-      ProxyKernel<<<1, 1>>>(queue, target, size, addr, 1);
-      CUDA_CHECK(cudaDeviceSynchronize());
-    }
+  void Write(Peer& peer, typename Peer::template Buffers<T>& write) {
+    auto ctx = write[target]->GetContext();
+    void* addr = write[target]->Data();
+    size_t size = write[target]->Size();
+    auto& prop = peer.loc.GetGPUAffinity()[peer.device].prop;
+    cudaLaunchConfig_t cfg{};
+    cfg.blockDim = dim3(prop.maxThreadsPerBlock, 1, 1);
+    cfg.gridDim = dim3((size + cfg.blockDim.x - 1) / cfg.blockDim.x, 1, 1);
+    cfg.stream = peer.stream;
+    LAUNCH_KERNEL(&cfg, ProxyKernel, ctx, target, size, addr, 1ULL);
 
     for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
     Run([&]() -> Coro<> {
-      if (rank == 0) {
-        DeviceRequest req;
-        while (write[target]->GetQueue()->Pop(req)) co_await write[target]->Write(static_cast<int>(req.rank), req.imm, channel);
-      } else if (rank == target) {
-        co_await read[0]->WaitImmdata(1);
+      DeviceRequest req;
+      while (ctx.queue->Pop(req)) {
+        co_await write[target]->Write(static_cast<int>(req.rank), req.imm, channel);
+        write[target]->Complete();
       }
       for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
     }());
+  }
+
+  template <typename T>
+  void Wait(Peer& peer, typename Peer::template Buffers<T>& read) {
+    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    Run([&]() -> Coro<> {
+      co_await read[0]->WaitImmdata(1);
+      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+    }());
+  }
+
+  template <typename T>
+  void operator()(Peer& peer, typename Peer::template Buffers<T>& write, typename Peer::template Buffers<T>& read) {
+    int rank = peer.mpi.GetWorldRank();
+    if (rank == 0)
+      Write<T>(peer, write);
+    else if (rank == target)
+      Wait<T>(peer, read);
   }
 };
 
@@ -65,27 +85,44 @@ struct ProxyWriteMulti {
   int target;
 
   template <typename T>
-  void operator()(Peer& peer, typename Peer::template Buffers<T>& write, typename Peer::template Buffers<T>& read) {
-    int rank = peer.mpi.GetWorldRank();
-
-    if (rank == 0) {
-      auto* queue = write[target]->GetQueue();
-      void* addr = write[target]->Data();
-      size_t size = write[target]->Size();
-      ProxyKernel<<<1, 1>>>(queue, target, size, addr, 1);
-      CUDA_CHECK(cudaDeviceSynchronize());
-    }
+  void Write(Peer& peer, typename Peer::template Buffers<T>& write) {
+    auto ctx = write[target]->GetContext();
+    void* addr = write[target]->Data();
+    size_t size = write[target]->Size();
+    auto& prop = peer.loc.GetGPUAffinity()[peer.device].prop;
+    cudaLaunchConfig_t cfg{};
+    cfg.blockDim = dim3(prop.maxThreadsPerBlock, 1, 1);
+    cfg.gridDim = dim3((size + cfg.blockDim.x - 1) / cfg.blockDim.x, 1, 1);
+    cfg.stream = peer.stream;
+    LAUNCH_KERNEL(&cfg, ProxyKernel, ctx, target, size, addr, 1ULL);
 
     for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
     Run([&]() -> Coro<> {
-      if (rank == 0) {
-        DeviceRequest req;
-        while (write[target]->GetQueue()->Pop(req)) co_await write[target]->Writeall(static_cast<int>(req.rank), req.imm);
-      } else if (rank == target) {
-        co_await read[0]->WaitallImmdata(1);
+      DeviceRequest req;
+      while (ctx.queue->Pop(req)) {
+        co_await write[target]->Writeall(static_cast<int>(req.rank), req.imm);
+        write[target]->Complete();
       }
       for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
     }());
+  }
+
+  template <typename T>
+  void Wait(Peer& peer, typename Peer::template Buffers<T>& read) {
+    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    Run([&]() -> Coro<> {
+      co_await read[0]->WaitallImmdata(1);
+      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+    }());
+  }
+
+  template <typename T>
+  void operator()(Peer& peer, typename Peer::template Buffers<T>& write, typename Peer::template Buffers<T>& read) {
+    int rank = peer.mpi.GetWorldRank();
+    if (rank == 0)
+      Write<T>(peer, write);
+    else if (rank == target)
+      Wait<T>(peer, read);
   }
 };
 
