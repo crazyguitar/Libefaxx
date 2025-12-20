@@ -29,12 +29,12 @@ class SymmetricMemory : public BufferType {
   /**
    * @brief Construct SymmetricMemory with buffer allocation
    * @param channels Channels for transferring data
-   * @param device CUDA device ID (ignored for HostBuffer)
    * @param size Buffer size in bytes
    * @param world_size Number of ranks in the world
+   * @param device CUDA device ID (ignored for HostBuffer, default -1)
    * @param align Memory alignment in bytes
    */
-  SymmetricMemory(std::vector<Channel>& channels, int device, size_t size, int world_size, size_t align = BufferType::kAlign)
+  SymmetricMemory(std::vector<Channel>& channels, size_t size, int world_size, int device = -1, size_t align = BufferType::kAlign)
       : BufferType(channels, device, size, align), world_size_(world_size) {
     rma_iovs_.resize(world_size_);
   }

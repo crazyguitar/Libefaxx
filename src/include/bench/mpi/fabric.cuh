@@ -41,7 +41,7 @@ __global__ void InitBufferKernel(int* __restrict__ data, size_t len, int value) 
  */
 template <typename T>
 std::unique_ptr<T> MakeBuffer(std::vector<Channel>& c, int device, size_t size, int world_size) {
-  return std::make_unique<T>(c, device, size, world_size);
+  return std::make_unique<T>(c, size, world_size, device);
 }
 
 /** @brief Create buffer specialization for raw HostBuffer (no world_size) */
