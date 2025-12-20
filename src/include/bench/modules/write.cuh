@@ -6,7 +6,7 @@
 
 #include <io/coro.h>
 #include <io/runner.h>
-#include <rdma/proxy.h>
+#include <rdma/fabric/selector.h>
 
 /**
  * @brief Rank 0 write functor (single channel)
@@ -75,11 +75,11 @@ struct PairWrite {
 
   template <typename T>
   void operator()(Peer& peer, typename Peer::template Buffers<T>& write, typename Peer::template Buffers<T>& read) {
-    for (auto& efa : peer.efas) IO::Get().Join<FabricProxy>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
     Run([&]() -> Coro<> {
       co_await Write<Peer>{target, channel}.template operator()<T>(peer, write);
       co_await Read<Peer>{target}.template operator()<T>(peer, read);
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricProxy>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
     }());
   }
 };
@@ -93,11 +93,11 @@ struct PairWriteMulti {
 
   template <typename T>
   void operator()(Peer& peer, typename Peer::template Buffers<T>& write, typename Peer::template Buffers<T>& read) {
-    for (auto& efa : peer.efas) IO::Get().Join<FabricProxy>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
     Run([&]() -> Coro<> {
       co_await WriteMulti<Peer>{target}.template operator()<T>(peer, write);
       co_await ReadMulti<Peer>{target}.template operator()<T>(peer, read);
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricProxy>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
     }());
   }
 };

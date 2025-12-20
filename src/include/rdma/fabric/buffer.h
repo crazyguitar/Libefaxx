@@ -8,7 +8,7 @@
 #include <io/common.h>
 #include <io/coro.h>
 #include <rdma/fabric/channel.h>
-#include <rdma/proxy.h>
+#include <rdma/fabric/selector.h>
 #include <spdlog/spdlog.h>
 #include <unistd.h>
 
@@ -40,7 +40,7 @@ class Buffer : private NoCopy {
 
     inline void await_resume() noexcept {
       // Cleanup: remove context from selector
-      IO::Get().Quit<FabricProxy>(context);
+      IO::Get().Quit<FabricSelector>(context);
     }
 
     template <typename Promise>
@@ -50,7 +50,7 @@ class Buffer : private NoCopy {
       context.handle = &coroutine.promise();
       context.imm_data = imm_data;
       // Join returns true if completion already arrived (don't suspend)
-      if (IO::Get().Join<FabricProxy>(context)) {
+      if (IO::Get().Join<FabricSelector>(context)) {
         return false;  // Don't suspend, completion already arrived
       }
       coroutine.promise().SetState(Handle::kSuspend);

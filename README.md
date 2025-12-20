@@ -70,7 +70,7 @@ struct PairBench {
   int target;
   template <typename T>
   void operator()(FabricBench& peer, FabricBench::Buffers<T>& send, FabricBench::Buffers<T>& recv) {
-    for (auto& efa : peer.efas) IO::Get().Join<FabricProxy>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
     Run([&]() -> Coro<> {
       size_t channel = 0;
       if (peer.mpi.GetWorldRank() == 0) {
@@ -80,7 +80,7 @@ struct PairBench {
         co_await recv[0]->Recvall(channel);
         co_await send[0]->Sendall(channel);
       }
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricProxy>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
     }());
   }
 };

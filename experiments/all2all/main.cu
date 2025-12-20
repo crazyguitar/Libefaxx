@@ -7,7 +7,7 @@
  */
 #include <bench/arguments.h>
 #include <rdma/fabric/memory.h>
-#include <rdma/proxy.h>
+#include <rdma/fabric/selector.h>
 
 #include <bench/modules/all2all.cuh>
 #include <bench/mpi/fabric.cuh>
@@ -21,10 +21,10 @@ struct All2all {
   int channel = 0;
   template <typename T>
   void operator()(FabricBench& peer, FabricBench::Buffers<T>& write, FabricBench::Buffers<T>& read) {
-    for (auto& efa : peer.efas) IO::Get().Join<FabricProxy>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
     Run([&]() -> Coro<> {
       co_await RunAll2allWrite(write, read, channel, peer.mpi.GetWorldSize(), peer.mpi.GetWorldRank());
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricProxy>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
     }());
   }
 };
@@ -33,10 +33,10 @@ struct All2all {
 struct All2allMulti {
   template <typename T>
   void operator()(FabricBench& peer, FabricBench::Buffers<T>& write, FabricBench::Buffers<T>& read) {
-    for (auto& efa : peer.efas) IO::Get().Join<FabricProxy>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
     Run([&]() -> Coro<> {
       co_await RunAll2allWriteMultiChannel(write, read, peer.mpi.GetWorldSize(), peer.mpi.GetWorldRank());
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricProxy>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
     }());
   }
 };
