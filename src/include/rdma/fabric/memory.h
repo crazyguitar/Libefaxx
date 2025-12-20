@@ -12,6 +12,7 @@
 #include <rdma/fabric/request.h>
 
 #include <algorithm>
+#include <queue/queue.cuh>
 
 /**
  * @brief Symmetric memory class with 2D RMA IOV structure
@@ -167,33 +168,13 @@ class SymmetricMemory : public BufferType {
     }
   }
 
-  /**
-   * @brief Merge contiguous device requests by type
-   * @param reqs Input requests (will be cleared)
-   * @return Vector of merged device requests
-   */
-  static std::vector<DeviceRequest> MergeRequests(std::vector<DeviceRequest>& reqs) {
-    if (reqs.empty()) return {};
-    std::sort(reqs.begin(), reqs.end(), [](const auto& a, const auto& b) { return std::tie(a.type, a.addr) < std::tie(b.type, b.addr); });
-    std::vector<DeviceRequest> result;
-    result.reserve(reqs.size());
-    result.push_back(std::move(reqs[0]));
-    for (size_t i = 1; i < reqs.size(); ++i) {
-      auto& last = result.back();
-      auto& cur = reqs[i];
-      if (cur.type == last.type && cur.addr == last.addr + last.size) {
-        last.size += cur.size;
-      } else {
-        result.push_back(std::move(cur));
-      }
-    }
-    reqs.clear();
-    return result;
-  }
+  /** @brief Get queue pointer for CUDA kernel access */
+  [[nodiscard]] Queue<DeviceRequest>* GetQueue() noexcept { return &queue_; }
 
  private:
   int world_size_;                                 ///< Number of ranks in the world
   std::vector<std::vector<fi_rma_iov>> rma_iovs_;  ///< 2D RMA IOVs: [rank][channel]
+  Queue<DeviceRequest> queue_;                     ///< GPU request queue
 };
 
 /** @brief Symmetric memory with DMABUF for GPU direct access */

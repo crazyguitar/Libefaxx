@@ -1,15 +1,93 @@
 /**
  * @file main.cu
- * @brief EFA Write Benchmark - Point-to-point RDMA write bandwidth measurement
+ * @brief EFA Proxy Write Benchmark - GPU-initiated RDMA write
  *
- * Measures RDMA write bandwidth between rank 0 and all other ranks.
+ * Measures RDMA write bandwidth with GPU kernel pushing requests to queue.
  * Pattern: rank0 -> rank_k (k=1..N-1), results averaged across all pairs.
  */
 #include <bench/arguments.h>
+#include <io/runner.h>
 #include <rdma/fabric/memory.h>
+#include <rdma/fabric/selector.h>
 
-#include <bench/modules/write.cuh>
 #include <bench/mpi/fabric.cuh>
+
+/** @brief CUDA kernel to push write request to queue */
+__global__ void ProxyKernel(Queue<DeviceRequest>* queue, int rank, size_t size, void* addr, uint64_t imm) {
+  DeviceRequest req{
+      .type = static_cast<uint64_t>(DeviceRequestType::kPut),
+      .rank = static_cast<uint64_t>(rank),
+      .size = size,
+      .addr = reinterpret_cast<uint64_t>(addr),
+      .imm = imm
+  };
+  queue->Push(req);
+}
+
+/**
+ * @brief Proxy write functor (single channel) - GPU kernel initiates write
+ */
+template <typename Peer>
+struct ProxyWrite {
+  int target;
+  int channel;
+
+  template <typename T>
+  void operator()(Peer& peer, typename Peer::template Buffers<T>& write, typename Peer::template Buffers<T>& read) {
+    int rank = peer.mpi.GetWorldRank();
+
+    if (rank == 0) {
+      auto* queue = write[target]->GetQueue();
+      void* addr = write[target]->Data();
+      size_t size = write[target]->Size();
+      ProxyKernel<<<1, 1>>>(queue, target, size, addr, 1);
+      CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
+    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    Run([&]() -> Coro<> {
+      if (rank == 0) {
+        DeviceRequest req;
+        while (write[target]->GetQueue()->Pop(req)) co_await write[target]->Write(static_cast<int>(req.rank), req.imm, channel);
+      } else if (rank == target) {
+        co_await read[0]->WaitImmdata(1);
+      }
+      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+    }());
+  }
+};
+
+/**
+ * @brief Proxy write functor (multi-channel) - GPU kernel initiates write
+ */
+template <typename Peer>
+struct ProxyWriteMulti {
+  int target;
+
+  template <typename T>
+  void operator()(Peer& peer, typename Peer::template Buffers<T>& write, typename Peer::template Buffers<T>& read) {
+    int rank = peer.mpi.GetWorldRank();
+
+    if (rank == 0) {
+      auto* queue = write[target]->GetQueue();
+      void* addr = write[target]->Data();
+      size_t size = write[target]->Size();
+      ProxyKernel<<<1, 1>>>(queue, target, size, addr, 1);
+      CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
+    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    Run([&]() -> Coro<> {
+      if (rank == 0) {
+        DeviceRequest req;
+        while (write[target]->GetQueue()->Pop(req)) co_await write[target]->Writeall(static_cast<int>(req.rank), req.imm);
+      } else if (rank == target) {
+        co_await read[0]->WaitallImmdata(1);
+      }
+      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+    }());
+  }
+};
 
 /** @brief Bandwidth type tags */
 struct SingleLinkBW {};
@@ -26,7 +104,6 @@ struct Test {
     peer.Connect();
     int rank = peer.mpi.GetWorldRank();
     int world = peer.mpi.GetWorldSize();
-    size_t num_ints = size / sizeof(int);
 
     auto [write, read] = peer.AllocPair<BufType>(size);
     peer.Handshake(write, read);
@@ -34,9 +111,8 @@ struct Test {
     double sum_bw = 0;
     double sum_time = 0;
     for (int t = 1; t < world; ++t) {
-      if (rank == 0) RandInit(write[t].get(), num_ints, peer.stream);
-      peer.Warmup(write, read, PairWrite<FabricBench>{t, 0}, NoVerify{}, opts.warmup);
-      auto r = peer.Bench(write, read, PairWrite<FabricBench>{t, 0}, NoVerify{}, opts.repeat);
+      peer.Warmup(write, read, ProxyWrite<FabricBench>{t, 0}, NoVerify{}, opts.warmup);
+      auto r = peer.Bench(write, read, ProxyWrite<FabricBench>{t, 0}, NoVerify{}, opts.repeat);
       sum_bw += r.bw_gbps;
       sum_time += r.time_us;
     }
@@ -59,7 +135,6 @@ struct TestMulti {
     peer.Connect();
     int rank = peer.mpi.GetWorldRank();
     int world = peer.mpi.GetWorldSize();
-    size_t num_ints = size / sizeof(int);
 
     auto [write, read] = peer.AllocPair<BufType>(size);
     peer.Handshake(write, read);
@@ -67,9 +142,8 @@ struct TestMulti {
     double sum_bw = 0;
     double sum_time = 0;
     for (int t = 1; t < world; ++t) {
-      if (rank == 0) RandInit(write[t].get(), num_ints, peer.stream);
-      peer.Warmup(write, read, PairWriteMulti<FabricBench>{t}, NoVerify{}, opts.warmup);
-      auto r = peer.Bench(write, read, PairWriteMulti<FabricBench>{t}, NoVerify{}, opts.repeat);
+      peer.Warmup(write, read, ProxyWriteMulti<FabricBench>{t}, NoVerify{}, opts.warmup);
+      auto r = peer.Bench(write, read, ProxyWriteMulti<FabricBench>{t}, NoVerify{}, opts.repeat);
       sum_bw += r.bw_gbps;
       sum_time += r.time_us;
     }
@@ -89,7 +163,6 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
   return results;
 }
 
-using SinglePin = Test<SymmetricPinMemory, SingleLinkBW>;
 using SingleDMA = Test<SymmetricDMAMemory, SingleLinkBW>;
 using MultiDMA = TestMulti<SymmetricDMAMemory, TotalLinkBW>;
 
@@ -104,15 +177,15 @@ int main(int argc, char* argv[]) {
     double single_bw = peer.GetBandwidth(0) / 1e9;
     double total_bw = peer.GetTotalBandwidth() / 1e9;
 
-    std::vector<std::array<BenchResult, 3>> results;
+    std::vector<std::array<BenchResult, 2>> results;
     for (auto size : sizes) {
-      results.push_back(RunTests<SinglePin, SingleDMA, MultiDMA>(size, opts, single_bw, total_bw));
+      results.push_back(RunTests<SingleDMA, MultiDMA>(size, opts, single_bw, total_bw));
     }
 
     if (rank == 0) {
       FabricBench::Print(
-          "EFA Write Benchmark", nranks, opts.warmup, opts.repeat, single_bw, "rank0 -> rank_k (k=1..N-1), averaged across all pairs",
-          {"SinglePin", "SingleDMA", "MultiDMA"}, results
+          "EFA Proxy Write Benchmark", nranks, opts.warmup, opts.repeat, single_bw, "GPU kernel -> Queue -> RDMA write, rank0 -> rank_k",
+          {"SingleDMA", "MultiDMA"}, results
       );
     }
     return 0;
