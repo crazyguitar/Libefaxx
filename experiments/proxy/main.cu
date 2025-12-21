@@ -44,10 +44,7 @@ __device__ __forceinline__ void DeviceWait(DeviceContext ctx) {
 /** @brief Device function: verify received data */
 __device__ __forceinline__ bool DeviceVerify(int expected, size_t len, int* data) {
   int idx = threadIdx.x + blockIdx.x * blockDim.x;
-  bool ok = true;
-  if (idx < len) {
-    if (data[idx] != expected + idx) ok = false;
-  }
+  bool ok = (idx >= len) || (data[idx] == expected + idx);
   return __syncthreads_and(ok);
 }
 
