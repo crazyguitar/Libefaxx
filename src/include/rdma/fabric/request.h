@@ -61,9 +61,7 @@ __device__ __forceinline__ void Fence() { __threadfence_system(); }
  */
 __device__ __forceinline__ void Quiet(uint64_t* posted, uint64_t* completed) {
   uint64_t expected = *posted;
-  while (*completed < expected) {
-    __threadfence_system();
-  }
+  while (*completed < expected) __threadfence_system();
   __threadfence_system();
 }
 #endif
