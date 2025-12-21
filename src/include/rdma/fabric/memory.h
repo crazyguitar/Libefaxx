@@ -195,7 +195,7 @@ class SymmetricMemory : public BufferType {
   [[nodiscard]] DeviceContext GetContext() noexcept { return {&queue_, posted_, completed_}; }
 
   /** @brief Increment completed counter (called by CPU after RDMA completion) */
-  void Complete() noexcept { (*completed_)++; }
+  void Complete() noexcept { reinterpret_cast<cuda::std::atomic<uint64_t>*>(completed_)->fetch_add(1, cuda::std::memory_order_relaxed); }
 
  private:
   int world_size_;                                 ///< Number of ranks in the world
