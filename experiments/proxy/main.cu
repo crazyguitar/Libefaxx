@@ -15,12 +15,10 @@
 
 /** @brief Device function: rank 0 writes data and pushes request */
 __device__ __forceinline__ void DeviceWrite(DeviceContext ctx, int target, size_t len, int* data, uint64_t imm) {
-  // Initialize data - each thread handles multiple elements
-  for (int idx = threadIdx.x; idx < len; idx += blockDim.x) {
-    data[idx] = target + idx;
+  for (size_t idx = threadIdx.x; idx < len; idx += blockDim.x) {
+    data[idx] = target + static_cast<int>(idx);
   }
   __threadfence_system();
-  __syncthreads();
 
   if (threadIdx.x == 0) {
     DeviceRequest req{
@@ -44,7 +42,6 @@ __device__ __forceinline__ void DeviceWait(DeviceContext ctx, int expected_ops) 
     while (*ctx.completed < expected_ops) __threadfence_system();
   }
   __syncthreads();
-  __threadfence_system();
 }
 
 /** @brief Device function: verify received data */
@@ -53,7 +50,6 @@ __device__ __forceinline__ bool DeviceVerify(int expected, size_t len, int* data
   for (size_t idx = threadIdx.x; idx < len; idx += blockDim.x) {
     if (data[idx] != expected + static_cast<int>(idx)) ok = false;
   }
-  __syncthreads();
   return ok;
 }
 
