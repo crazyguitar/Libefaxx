@@ -43,8 +43,11 @@
  *
  * @tparam T The type of elements stored in the queue. Must be trivially copyable.
  */
+/// Cache line size for alignment (128 bytes covers both CPU 64B and GPU 128B cache lines)
+inline constexpr size_t kCacheLineSize = 128;
+
 template <typename T>
-struct Queue {
+struct alignas(kCacheLineSize) Queue {
   /// Default queue capacity (must be power of two)
   static constexpr size_t kDefaultSize = 8192;
 
@@ -53,10 +56,10 @@ struct Queue {
     T data;
   };
 
-  Cell* buffer;
-  uint64_t mask;
-  cuda::std::atomic<uint64_t> head;
-  cuda::std::atomic<uint64_t> tail;
+  alignas(kCacheLineSize) Cell* buffer;                      ///< Cell buffer
+  uint64_t mask;                                             ///< Size mask for index wrapping
+  alignas(kCacheLineSize) cuda::std::atomic<uint64_t> head;  ///< Producer index (separate cache line to avoid false sharing)
+  alignas(kCacheLineSize) cuda::std::atomic<uint64_t> tail;  ///< Consumer index (separate cache line to avoid false sharing)
 
   /**
    * Construct a new Queue with the given size.
@@ -89,7 +92,7 @@ struct Queue {
    * @param data The element to push.
    * @return true if the element was successfully pushed, false if the queue is full.
    */
-  __device__ bool Push(const T& data) {
+  __device__ __forceinline__ bool Push(const T& data) {
     uint64_t pos = head.load(cuda::std::memory_order_relaxed);
 
     for (;;) {
@@ -127,7 +130,7 @@ struct Queue {
    * @param data Output parameter to receive the popped element.
    * @return true if an element was successfully popped, false if the queue is empty.
    */
-  __host__ bool Pop(T& data) {
+  __host__ inline bool Pop(T& data) {
     uint64_t pos = tail.load(cuda::std::memory_order_relaxed);
 
     for (;;) {
