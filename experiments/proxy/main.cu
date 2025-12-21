@@ -87,9 +87,10 @@ struct ProxyWrite {
     size_t len = size / sizeof(int);
     auto& prop = peer.loc.GetGPUAffinity()[peer.device].prop;
 
+    // Single block with max threads to fit kernel on one SM for efficient __syncthreads()
     cudaLaunchConfig_t cfg{};
     cfg.blockDim = dim3(prop.maxThreadsPerBlock, 1, 1);
-    cfg.gridDim = dim3(1, 1, 1);  // Single block for proper synchronization
+    cfg.gridDim = dim3(1, 1, 1);
     cfg.stream = peer.stream;
 
     LAUNCH_KERNEL(&cfg, ProxyWriteKernel, ctx, world_size, len, data, 1ULL, iters);
@@ -137,6 +138,7 @@ struct ProxyRead {
     CUDA_CHECK(cudaMallocManaged(&result, sizeof(int)));
     *result = 1;
 
+    // Single block with max threads to fit kernel on one SM for efficient __syncthreads()
     cudaLaunchConfig_t cfg{};
     cfg.blockDim = dim3(prop.maxThreadsPerBlock, 1, 1);
     cfg.gridDim = dim3(1, 1, 1);

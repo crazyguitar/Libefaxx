@@ -269,10 +269,8 @@ class FabricBench : public Peer {
       func(*this, a, b);
       if (rank == 0 && i % 10 == 0) progress.Print(std::chrono::high_resolution_clock::now(), buf_size, i + 1);
     }
-    // run barrier to ensure all bench done
     MPI_Barrier(MPI_COMM_WORLD);
     auto end = std::chrono::high_resolution_clock::now();
-    if (rank == 0) std::cout << "\n";
     double elapsed_us = std::chrono::duration<double, std::micro>(end - start).count();
     double avg_us = elapsed_us / iters;
     double bw_gbps = (buf_size * 8.0) / (avg_us * 1000.0);

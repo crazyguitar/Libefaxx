@@ -69,7 +69,7 @@ class Progress : private NoCopy {
     auto bw_gbps = bytes * Gb / elapse;
     auto total_bw_gbs = total_bw * 1e-9;
     auto percent = 100.0 * bw_gbps / (total_bw_gbs);
-    std::cout << fmt::format("\r[{:.3f}s] ops={}/{} bytes={}/{} bw={:.3f}Gbps({:.1f})\033[K", elapse, ops, total_ops, bytes, total_bytes, bw_gbps, percent) << std::flush;
+    std::cout << fmt::format("\r[{:.3f}s] ops={}/{} bytes={}/{} bw={:.3f}Gbps({:.1f}%)\033[K", elapse, ops, total_ops, bytes, total_bytes, bw_gbps, percent) << std::flush;
   }
   // clang-format on
 
