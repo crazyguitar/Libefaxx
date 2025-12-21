@@ -15,11 +15,14 @@
 
 /** @brief Device function: rank 0 writes data and pushes request */
 __device__ __forceinline__ void DeviceWrite(DeviceContext ctx, int target, size_t len, int* data, uint64_t imm) {
-  int idx = threadIdx.x + blockIdx.x * blockDim.x;
-  if (idx < len) data[idx] = target + idx;
+  // Initialize data - each thread handles multiple elements
+  for (int idx = threadIdx.x; idx < len; idx += blockDim.x) {
+    data[idx] = target + idx;
+  }
   __threadfence_system();
+  __syncthreads();
 
-  if (threadIdx.x == 0 && blockIdx.x == 0) {
+  if (threadIdx.x == 0) {
     DeviceRequest req{
         .type = static_cast<uint64_t>(DeviceRequestType::kPut),
         .rank = static_cast<uint64_t>(target),
@@ -32,20 +35,26 @@ __device__ __forceinline__ void DeviceWrite(DeviceContext ctx, int target, size_
     Fence();
     Quiet(ctx.posted, ctx.completed);
   }
+  __syncthreads();
 }
 
 /** @brief Device function: rank 1..n waits for data from rank 0 */
-__device__ __forceinline__ void DeviceWait(DeviceContext ctx) {
-  if (threadIdx.x == 0 && blockIdx.x == 0) {
-    Quiet(ctx.posted, ctx.completed);
+__device__ __forceinline__ void DeviceWait(DeviceContext ctx, int expected_ops) {
+  if (threadIdx.x == 0) {
+    while (*ctx.completed < expected_ops) __threadfence_system();
   }
+  __syncthreads();
+  __threadfence_system();
 }
 
 /** @brief Device function: verify received data */
 __device__ __forceinline__ bool DeviceVerify(int expected, size_t len, int* data) {
-  int idx = threadIdx.x + blockIdx.x * blockDim.x;
-  bool ok = (idx >= len) || (data[idx] == expected + idx);
-  return __syncthreads_and(ok);
+  bool ok = true;
+  for (size_t idx = threadIdx.x; idx < len; idx += blockDim.x) {
+    if (data[idx] != expected + static_cast<int>(idx)) ok = false;
+  }
+  __syncthreads();
+  return ok;
 }
 
 /** @brief Kernel for rank 0: write to all targets */
@@ -58,10 +67,10 @@ __global__ void ProxyWriteKernel(DeviceContext ctx, int world_size, size_t len, 
 }
 
 /** @brief Kernel for rank 1..n: wait and verify */
-__global__ void ProxyWaitKernel(DeviceContext ctx, size_t len, int* data, int iters, int* result) {
-  for (int i = 0; i < iters; ++i) DeviceWait(ctx);
-  bool ok = DeviceVerify(0, len, data);
-  if (threadIdx.x == 0 && blockIdx.x == 0) *result = ok ? 1 : 0;
+__global__ void ProxyWaitKernel(DeviceContext ctx, int rank, size_t len, int* data, int iters, int* result) {
+  DeviceWait(ctx, iters);
+  bool ok = DeviceVerify(rank, len, data);
+  if (threadIdx.x == 0) *result = ok ? 1 : 0;
 }
 
 /**
@@ -84,7 +93,7 @@ struct ProxyWrite {
 
     cudaLaunchConfig_t cfg{};
     cfg.blockDim = dim3(prop.maxThreadsPerBlock, 1, 1);
-    cfg.gridDim = dim3((len + cfg.blockDim.x - 1) / cfg.blockDim.x, 1, 1);
+    cfg.gridDim = dim3(1, 1, 1);  // Single block for proper synchronization
     cfg.stream = peer.stream;
 
     LAUNCH_KERNEL(&cfg, ProxyWriteKernel, ctx, world_size, len, data, 1ULL, iters);
@@ -134,10 +143,10 @@ struct ProxyRead {
 
     cudaLaunchConfig_t cfg{};
     cfg.blockDim = dim3(prop.maxThreadsPerBlock, 1, 1);
-    cfg.gridDim = dim3((len + cfg.blockDim.x - 1) / cfg.blockDim.x, 1, 1);
+    cfg.gridDim = dim3(1, 1, 1);
     cfg.stream = peer.stream;
 
-    LAUNCH_KERNEL(&cfg, ProxyWaitKernel, ctx, len, data, iters, result);
+    LAUNCH_KERNEL(&cfg, ProxyWaitKernel, ctx, peer.mpi.GetWorldRank(), len, data, iters, result);
 
     ::Run([&]() -> Coro<> {
       for (int i = 0; i < iters; ++i) {
