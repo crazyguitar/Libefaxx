@@ -23,6 +23,8 @@ class Progress : private NoCopy {
 
   /** @brief Conversion factor: bytes to gigabits */
   inline constexpr static double Gb = 8.0f / 1e9;
+  /** @brief Print frequency to reduce overhead */
+  inline constexpr static int kPrintFreq = 64;
 
   Progress() = default;
   /**

@@ -267,7 +267,7 @@ class FabricBench : public Peer {
     auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < iters; ++i) {
       func(*this, a, b);
-      if (rank == 0 && i % 10 == 0) progress.Print(std::chrono::high_resolution_clock::now(), buf_size, i + 1);
+      if (rank == 0 && i % Progress::kPrintFreq == 0) progress.Print(std::chrono::high_resolution_clock::now(), buf_size, i + 1);
     }
     MPI_Barrier(MPI_COMM_WORLD);
     auto end = std::chrono::high_resolution_clock::now();

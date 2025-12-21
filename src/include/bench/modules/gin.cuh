@@ -88,7 +88,7 @@ struct ProxyWrite {
         if (ctx.queue->Pop(req)) {
           co_await Write(write[target], target, req.imm);
           write[target]->Complete();
-          if (++done % 10 == 0) progress.Print(std::chrono::high_resolution_clock::now(), size, done);
+          if (++done % Progress::kPrintFreq == 0) progress.Print(std::chrono::high_resolution_clock::now(), size, done);
         }
         co_await YieldAwaiter{};
       }
