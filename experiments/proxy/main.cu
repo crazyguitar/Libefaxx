@@ -6,6 +6,7 @@
  * Pattern: rank0 -> rank_k (k=1..N-1), results averaged across all pairs.
  */
 #include <bench/arguments.h>
+#include <io/awaiter.h>
 #include <io/runner.h>
 #include <rdma/fabric/memory.h>
 #include <rdma/fabric/selector.h>
@@ -107,7 +108,7 @@ struct ProxyWrite {
           ++completed;
           if (completed % 10 == 0) progress.Print(std::chrono::high_resolution_clock::now(), size, completed);
         }
-        co_await std::suspend_always{};
+        co_await YieldAwaiter{};
       }
     }());
 
