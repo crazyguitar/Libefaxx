@@ -188,11 +188,10 @@ struct ProxyBench {
  */
 template <typename BufType>
 struct Test {
-  static BenchResult Run(size_t size, const Options& opts, double total_bw) {
+  static BenchResult Run(size_t size, const Options& opts, double single_bw, double total_bw) {
     FabricBench peer;
     peer.Exchange();
     peer.Connect();
-    int rank = peer.mpi.GetWorldRank();
 
     auto [write, read] = peer.AllocPair<BufType>(size);
     peer.Handshake(write, read);
@@ -205,6 +204,14 @@ struct Test {
   }
 };
 
+template <typename... Tests>
+std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& opts, double single_bw, double total_bw) {
+  std::array<BenchResult, sizeof...(Tests)> results;
+  size_t i = 0;
+  ((results[i++] = Tests::Run(size, opts, single_bw, total_bw), MPI_Barrier(MPI_COMM_WORLD)), ...);
+  return results;
+}
+
 using ProxyDMA = Test<SymmetricDMAMemory>;
 
 int main(int argc, char* argv[]) {
@@ -215,23 +222,19 @@ int main(int argc, char* argv[]) {
     int nranks = MPI::Get().GetWorldSize();
 
     FabricBench peer;
+    double single_bw = peer.GetBandwidth(0) / 1e9;
     double total_bw = peer.GetTotalBandwidth() / 1e9;
 
-    std::vector<BenchResult> results;
+    std::vector<std::array<BenchResult, 1>> results;
     for (auto size : sizes) {
-      results.push_back(ProxyDMA::Run(size, opts, total_bw));
-      MPI_Barrier(MPI_COMM_WORLD);
+      results.push_back(RunTests<ProxyDMA>(size, opts, single_bw, total_bw));
     }
 
     if (rank == 0) {
-      fmt::print("\n");
-      fmt::print("EFA Proxy Write Benchmark\n");
-      fmt::print("  Ranks: {}, Iterations: {}\n", nranks, opts.repeat);
-      fmt::print("  Total BW: {:.2f} Gbps\n\n", total_bw);
-      fmt::print("{:>12} {:>12} {:>12} {:>10}\n", "Size", "Time(us)", "BW(Gbps)", "BusBW(%)");
-      for (auto& r : results) {
-        fmt::print("{:>12} {:>12.2f} {:>12.2f} {:>10.1f}\n", r.size, r.time_us, r.bw_gbps, r.bus_bw);
-      }
+      FabricBench::Print(
+          "EFA Proxy Write Benchmark", nranks, opts.warmup, opts.repeat, total_bw, "GPU kernel -> Queue -> RDMA write, rank0 -> rank_k", {"ProxyDMA"},
+          results
+      );
     }
     return 0;
   } catch (const std::exception& e) {
