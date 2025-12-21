@@ -1,9 +1,6 @@
 /**
  * @file main.cu
- * @brief EFA Proxy Write Benchmark - GPU-initiated RDMA write
- *
- * Measures RDMA write bandwidth with GPU kernel pushing requests to queue.
- * Pattern: rank0 -> rank_k (k=1..N-1), results averaged across all pairs.
+ * @brief EFA Proxy Write Benchmark - GPU-initiated RDMA write via CPU proxy
  */
 #include <bench/arguments.h>
 #include <io/awaiter.h>
@@ -13,23 +10,18 @@
 
 #include <bench/mpi/fabric.cuh>
 
-/** @brief Device function: rank 0 writes data and pushes request */
-__device__ __forceinline__ void DeviceWrite(DeviceContext* ctxs, int target, size_t len, int* data, uint64_t imm) {
-  for (size_t idx = threadIdx.x; idx < len; idx += blockDim.x) {
-    data[idx] = target + static_cast<int>(idx);
-  }
+/** @brief Write data and push RDMA request to queue */
+__device__ __forceinline__ void DeviceWrite(DeviceContext ctx, int target, size_t len, int* __restrict__ data, uint64_t imm) {
+  for (size_t idx = threadIdx.x; idx < len; idx += blockDim.x) data[idx] = target + static_cast<int>(idx);
   __threadfence_system();
-
   if (threadIdx.x == 0) {
-    auto& ctx = ctxs[target];
-    DeviceRequest req{
-        .type = static_cast<uint64_t>(DeviceRequestType::kPut),
-        .rank = static_cast<uint64_t>(target),
-        .size = len * sizeof(int),
-        .addr = reinterpret_cast<uint64_t>(data),
-        .imm = imm
-    };
-    ctx.queue->Push(req);
+    ctx.queue->Push(
+        {.type = static_cast<uint64_t>(DeviceRequestType::kPut),
+         .rank = static_cast<uint64_t>(target),
+         .size = len * sizeof(int),
+         .addr = reinterpret_cast<uint64_t>(data),
+         .imm = imm}
+    );
     atomicAdd(reinterpret_cast<unsigned long long*>(ctx.posted), 1ULL);
     Fence();
     Quiet(ctx.posted, ctx.completed);
@@ -37,127 +29,87 @@ __device__ __forceinline__ void DeviceWrite(DeviceContext* ctxs, int target, siz
   __syncthreads();
 }
 
-/** @brief Device function: rank 1..n waits for data from rank 0 */
-__device__ __forceinline__ void DeviceWait(DeviceContext ctx, int expected_ops) {
+/** @brief Wait for expected number of completions */
+__device__ __forceinline__ void DeviceWait(DeviceContext ctx, int expected) {
   if (threadIdx.x == 0) {
-    while (*ctx.completed < expected_ops) __threadfence_system();
+    while (*ctx.completed < expected) __threadfence_system();
   }
   __syncthreads();
 }
 
-/** @brief Device function: verify received data */
-__device__ __forceinline__ bool DeviceVerify(int expected, size_t len, int* data) {
-  bool ok = true;
+/** @brief Verify received data matches expected pattern */
+__device__ __forceinline__ bool DeviceVerify(int expected, size_t len, const int* __restrict__ data) {
   for (size_t idx = threadIdx.x; idx < len; idx += blockDim.x) {
-    if (data[idx] != expected + static_cast<int>(idx)) ok = false;
+    if (data[idx] != expected + static_cast<int>(idx)) return false;
   }
-  return ok;
+  return true;
 }
 
-/** @brief Kernel for rank 0: write to all targets */
-__global__ void ProxyWriteKernel(DeviceContext* ctxs, int world_size, size_t len, int** datas, uint64_t imm, int iters) {
-  for (int i = 0; i < iters; ++i) {
-    for (int t = 1; t < world_size; ++t) {
-      DeviceWrite(ctxs, t, len, datas[t], imm);
-    }
-  }
+__global__ void ProxyWriteKernel(DeviceContext ctx, int target, size_t len, int* __restrict__ data, uint64_t imm, int iters) {
+  for (int i = 0; i < iters; ++i) DeviceWrite(ctx, target, len, data, imm);
 }
 
-/** @brief Kernel for rank 1..n: wait and verify */
-__global__ void ProxyWaitKernel(DeviceContext ctx, int rank, size_t len, int* data, int iters, int* result) {
+__global__ void ProxyWaitKernel(DeviceContext ctx, int rank, size_t len, int* __restrict__ data, int iters, int* __restrict__ result) {
   DeviceWait(ctx, iters);
-  bool ok = DeviceVerify(rank, len, data);
-  if (threadIdx.x == 0) *result = ok ? 1 : 0;
+  if (threadIdx.x == 0) *result = DeviceVerify(rank, len, data) ? 1 : 0;
 }
 
 /**
- * @brief Rank 0: launch write kernel and run proxy loop
- * @tparam MultiChannel If true, use all channels; if false, use single channel
+ * @brief Proxy write: GPU kernel pushes requests, CPU proxy executes RDMA
  */
-template <typename Peer, bool MultiChannel = true>
+template <typename Peer, bool MultiChannel>
 struct ProxyWrite {
-  int iters;
-  int world_size_;
-  DeviceContext* d_ctxs_ = nullptr;
-  int** d_datas_ = nullptr;
+  int iters, target;
 
-  ProxyWrite(int iters, int world_size) : iters{iters}, world_size_{world_size} {
-    CUDA_CHECK(cudaMalloc(&d_ctxs_, world_size_ * sizeof(DeviceContext)));
-    CUDA_CHECK(cudaMalloc(&d_datas_, world_size_ * sizeof(int*)));
-  }
-
-  ~ProxyWrite() {
-    if (d_ctxs_) cudaFree(d_ctxs_);
-    if (d_datas_) cudaFree(d_datas_);
+  template <typename Buf>
+  static Coro<ssize_t> Write(Buf& buf, int rank, uint64_t imm) {
+    if constexpr (MultiChannel)
+      return buf->Writeall(rank, imm);
+    else
+      return buf->Writeall(rank, imm, 0);
   }
 
   template <typename T>
   void operator()(Peer& peer, typename Peer::template Buffers<T>& write) {
     if (peer.mpi.GetWorldRank() != 0) return;
 
-    size_t size = write[1]->Size();
-    size_t len = size / sizeof(int);
-    auto& prop = peer.loc.GetGPUAffinity()[peer.device].prop;
+    auto ctx = write[target]->GetContext();
+    auto* data = reinterpret_cast<int*>(write[target]->Data());
+    size_t size = write[target]->Size(), len = size / sizeof(int);
 
-    std::vector<DeviceContext> h_ctxs(world_size_);
-    std::vector<int*> h_datas(world_size_);
-    for (int t = 1; t < world_size_; ++t) {
-      h_ctxs[t] = write[t]->GetContext();
-      h_datas[t] = reinterpret_cast<int*>(write[t]->Data());
-    }
-    CUDA_CHECK(cudaMemcpy(d_ctxs_, h_ctxs.data(), world_size_ * sizeof(DeviceContext), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_datas_, h_datas.data(), world_size_ * sizeof(int*), cudaMemcpyHostToDevice));
+    cudaLaunchConfig_t cfg{.gridDim = {1, 1, 1}, .blockDim = {256, 1, 1}, .stream = peer.stream};
+    LAUNCH_KERNEL(&cfg, ProxyWriteKernel, ctx, target, len, data, 1ULL, iters);
 
-    // Single block with max threads to fit kernel on one SM for efficient __syncthreads()
-    cudaLaunchConfig_t cfg{};
-    cfg.blockDim = dim3(prop.maxThreadsPerBlock, 1, 1);
-    cfg.gridDim = dim3(1, 1, 1);
-    cfg.stream = peer.stream;
-
-    LAUNCH_KERNEL(&cfg, ProxyWriteKernel, d_ctxs_, world_size_, len, d_datas_, 1ULL, iters);
-
-    int total_ops = iters * (world_size_ - 1);
-    size_t total_bw = MultiChannel ? peer.GetTotalBandwidth() : peer.GetBandwidth(0);
-    Progress progress(total_ops, total_bw);
-
+    Progress progress(iters, MultiChannel ? peer.GetTotalBandwidth() : peer.GetBandwidth(0));
     ::Run([&]() -> Coro<> {
-      int completed = 0;
-      DeviceRequest req;
-      while (completed < total_ops) {
-        for (int t = 1; t < world_size_; ++t) {
-          auto ctx = write[t]->GetContext();
-          if (ctx.queue->Pop(req)) {
-            if constexpr (MultiChannel) {
-              co_await write[req.rank]->Writeall(static_cast<int>(req.rank), req.imm);
-            } else {
-              co_await write[req.rank]->Writeall(static_cast<int>(req.rank), req.imm, 0);
-            }
-            write[req.rank]->Complete();
-            ++completed;
-            if (completed % 10 == 0) progress.Print(std::chrono::high_resolution_clock::now(), size, completed);
-          }
+      for (int done = 0; done < iters;) {
+        DeviceRequest req;
+        if (ctx.queue->Pop(req)) {
+          co_await Write(write[target], target, req.imm);
+          write[target]->Complete();
+          if (++done % 10 == 0) progress.Print(std::chrono::high_resolution_clock::now(), size, done);
         }
         co_await YieldAwaiter{};
       }
       for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
     }());
-
     CUDA_CHECK(cudaStreamSynchronize(peer.stream));
   }
 };
 
 /**
- * @brief Rank 1..n: launch wait kernel and receive immdata
- * @tparam MultiChannel If true, wait on all channels; if false, wait on single channel
+ * @brief Proxy read: wait for RDMA completions and signal GPU
  */
-template <typename Peer, bool MultiChannel = true>
+template <typename Peer, bool MultiChannel>
 struct ProxyRead {
   int iters;
-  int* result_ = nullptr;
 
-  ProxyRead(int iters) : iters{iters} { CUDA_CHECK(cudaMallocManaged(&result_, sizeof(int))); }
-  ~ProxyRead() {
-    if (result_) cudaFree(result_);
+  template <typename Buf>
+  static Coro<> Wait(Buf& buf, uint64_t imm) {
+    if constexpr (MultiChannel)
+      return buf->WaitallImmdata(imm);
+    else
+      return buf->WaitImmdata(imm);
   }
 
   template <typename T>
@@ -165,74 +117,57 @@ struct ProxyRead {
     if (peer.mpi.GetWorldRank() == 0) return;
 
     auto ctx = read[0]->GetContext();
-    int* data = reinterpret_cast<int*>(read[0]->Data());
+    auto* data = reinterpret_cast<int*>(read[0]->Data());
     size_t len = read[0]->Size() / sizeof(int);
-    auto& prop = peer.loc.GetGPUAffinity()[peer.device].prop;
+    int* result;
+    CUDA_CHECK(cudaMallocManaged(&result, sizeof(int)));
+    *result = 1;
 
-    *result_ = 1;
-
-    // Single block with max threads to fit kernel on one SM for efficient __syncthreads()
-    cudaLaunchConfig_t cfg{};
-    cfg.blockDim = dim3(prop.maxThreadsPerBlock, 1, 1);
-    cfg.gridDim = dim3(1, 1, 1);
-    cfg.stream = peer.stream;
-
-    LAUNCH_KERNEL(&cfg, ProxyWaitKernel, ctx, peer.mpi.GetWorldRank(), len, data, iters, result_);
+    cudaLaunchConfig_t cfg{.gridDim = {1, 1, 1}, .blockDim = {256, 1, 1}, .stream = peer.stream};
+    LAUNCH_KERNEL(&cfg, ProxyWaitKernel, ctx, peer.mpi.GetWorldRank(), len, data, iters, result);
 
     ::Run([&]() -> Coro<> {
       for (int i = 0; i < iters; ++i) {
-        if constexpr (MultiChannel) {
-          co_await read[0]->WaitallImmdata(1);
-        } else {
-          co_await read[0]->WaitImmdata(1);
-        }
+        co_await Wait(read[0], 1);
         read[0]->Complete();
       }
       for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
     }());
 
     CUDA_CHECK(cudaStreamSynchronize(peer.stream));
-    if (*result_ != 1) throw std::runtime_error(fmt::format("Verification failed on rank {}", peer.mpi.GetWorldRank()));
+    bool ok = (*result == 1);
+    CUDA_CHECK(cudaFree(result));
+    if (!ok) throw std::runtime_error(fmt::format("Verification failed on rank {}", peer.mpi.GetWorldRank()));
   }
 };
 
 /**
- * @brief Combined proxy benchmark
- * @tparam MultiChannel If true, use all channels; if false, use single channel
+ * @brief Combined proxy benchmark for a single target pair
  */
-template <typename Peer, bool MultiChannel = true>
+template <typename Peer, bool MultiChannel>
 struct ProxyBench {
-  int iters;
+  int iters, target;
 
   template <typename T>
   BenchResult Run(Peer& peer, typename Peer::template Buffers<T>& write, typename Peer::template Buffers<T>& read) {
     int rank = peer.mpi.GetWorldRank();
-    int world_size = peer.mpi.GetWorldSize();
-    size_t size = (rank == 0) ? write[1]->Size() : read[0]->Size();
+    size_t size = (rank == 0) ? write[target]->Size() : read[0]->Size();
+    if (rank != 0 && rank != target) return {size, 0, 0, 0};
 
     for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
 
-    ProxyWrite<Peer, MultiChannel> writer{iters, world_size};
-    ProxyRead<Peer, MultiChannel> reader{iters};
-
     auto start = std::chrono::high_resolution_clock::now();
-    writer.template operator()<T>(peer, write);
-    reader.template operator()<T>(peer, read);
+    ProxyWrite<Peer, MultiChannel>{iters, target}(peer, write);
+    ProxyRead<Peer, MultiChannel>{iters}(peer, read);
     auto end = std::chrono::high_resolution_clock::now();
 
     double time_us = std::chrono::duration<double, std::micro>(end - start).count();
-    double bw_gbps = (rank == 0) ? (static_cast<double>(size) * iters * (world_size - 1) * 8.0) / (time_us * 1000.0) : 0;
-
+    double bw_gbps = (rank == 0) ? (static_cast<double>(size) * iters * 8.0) / (time_us * 1000.0) : 0;
     return {size, time_us / iters, bw_gbps, 0.0};
   }
 };
 
-/**
- * @brief Test runner for proxy benchmark
- * @tparam BufType Buffer type (e.g., SymmetricDMAMemory)
- * @tparam MultiChannel If true, use all channels; if false, use single channel
- */
-template <typename BufType, bool MultiChannel = true>
+template <typename BufType, bool MultiChannel>
 struct Test {
   static BenchResult Run(size_t size, const Options& opts, double single_bw, double total_bw) {
     FabricBench peer;
@@ -242,12 +177,19 @@ struct Test {
     auto [write, read] = peer.AllocPair<BufType>(size);
     peer.Handshake(write, read);
 
-    auto r = ProxyBench<FabricBench, MultiChannel>{opts.repeat}.Run(peer, write, read);
+    double sum_bw = 0, sum_time = 0;
+    int world = peer.mpi.GetWorldSize();
+    for (int t = 1; t < world; ++t) {
+      auto r = ProxyBench<FabricBench, MultiChannel>{opts.repeat, t}.Run(peer, write, read);
+      sum_bw += r.bw_gbps;
+      sum_time += r.time_us;
+    }
     MPI_Barrier(MPI_COMM_WORLD);
 
+    int npairs = world - 1;
+    double avg_bw = sum_bw / npairs;
     double link_bw = MultiChannel ? total_bw : single_bw;
-    double bus_bw = (link_bw > 0) ? (r.bw_gbps / link_bw) * 100.0 : 0;
-    return {size, r.time_us, r.bw_gbps, bus_bw};
+    return {size, sum_time / npairs, avg_bw, (link_bw > 0) ? (avg_bw / link_bw) * 100.0 : 0};
   }
 };
 
@@ -274,9 +216,7 @@ int main(int argc, char* argv[]) {
     double total_bw = peer.GetTotalBandwidth() / 1e9;
 
     std::vector<std::array<BenchResult, 2>> results;
-    for (auto size : sizes) {
-      results.push_back(RunTests<ProxySingle, ProxyMulti>(size, opts, single_bw, total_bw));
-    }
+    for (auto size : sizes) results.push_back(RunTests<ProxySingle, ProxyMulti>(size, opts, single_bw, total_bw));
 
     if (rank == 0) {
       FabricBench::Print(
