@@ -39,7 +39,14 @@ class Peer : private NoCopy {
 
   Peer() : mpi(MPI::Get()), loc(GPUloc::Get()) {
     const auto world_size = mpi.GetWorldSize();
+    const auto rank = mpi.GetWorldRank();
     device = mpi.GetLocalRank();
+    static bool printed = false;
+    if (rank == 0 && !printed) {
+      auto& aff = loc.GetGPUAffinity()[device];
+      std::cout << fmt::format("CUDA Device {}: \"{}\"\n", device, aff.prop.name) << aff << std::flush;
+      printed = true;
+    }
     addrs.resize(world_size);
     auto& affinity = loc.GetGPUAffinity()[device];
     Taskset::Set(affinity.cores[device]->logical_index);
