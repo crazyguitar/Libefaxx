@@ -13,7 +13,7 @@
 #include <bench/mpi/fabric.cuh>
 
 /** @brief Device function: rank 0 writes data and pushes request */
-__device__ __forceinline__ void ProxyWrite(DeviceContext ctx, int target, size_t len, int* data, uint64_t imm) {
+__device__ __forceinline__ void DeviceWrite(DeviceContext ctx, int target, size_t len, int* data, uint64_t imm) {
   int idx = threadIdx.x + blockIdx.x * blockDim.x;
   if (idx < len) data[idx] = target + idx;
   __syncthreads();
@@ -36,7 +36,7 @@ __device__ __forceinline__ void ProxyWrite(DeviceContext ctx, int target, size_t
 }
 
 /** @brief Device function: rank 1..n waits for data from rank 0 */
-__device__ __forceinline__ void ProxyWait(DeviceContext ctx) {
+__device__ __forceinline__ void DeviceWait(DeviceContext ctx) {
   if (threadIdx.x == 0 && blockIdx.x == 0) {
     Quiet(ctx.posted, ctx.completed);
   }
@@ -44,7 +44,7 @@ __device__ __forceinline__ void ProxyWait(DeviceContext ctx) {
 }
 
 /** @brief Device function: verify received data */
-__device__ __forceinline__ bool ProxyVerify(int expected, size_t len, int* data) {
+__device__ __forceinline__ bool DeviceVerify(int expected, size_t len, int* data) {
   int idx = threadIdx.x + blockIdx.x * blockDim.x;
   bool ok = true;
   if (idx < len) {
@@ -53,34 +53,39 @@ __device__ __forceinline__ bool ProxyVerify(int expected, size_t len, int* data)
   return __syncthreads_and(ok);
 }
 
-/** @brief Kernel for rank 0: write to targets */
-__global__ void ProxyWriteKernel(DeviceContext ctx, int target, size_t len, int* data, uint64_t imm, int iters) {
+/** @brief Kernel for rank 0: write to all targets */
+__global__ void ProxyWriteKernel(DeviceContext ctx, int world_size, size_t len, int* data, uint64_t imm, int iters) {
   for (int i = 0; i < iters; ++i) {
-    ProxyWrite(ctx, target, len, data, imm);
+    for (int t = 1; t < world_size; ++t) {
+      DeviceWrite(ctx, t, len, data, imm);
+    }
   }
 }
 
 /** @brief Kernel for rank 1..n: wait and verify */
-__global__ void ProxyWaitKernel(DeviceContext ctx, int sender, size_t len, int* data, int iters, int* result) {
-  for (int i = 0; i < iters; ++i) ProxyWait(ctx);
-  bool ok = ProxyVerify(sender, len, data);
+__global__ void ProxyWaitKernel(DeviceContext ctx, size_t len, int* data, int iters, int* result) {
+  for (int i = 0; i < iters; ++i) {
+    DeviceWait(ctx);
+  }
+  bool ok = DeviceVerify(0, len, data);
   if (threadIdx.x == 0 && blockIdx.x == 0) *result = ok ? 1 : 0;
 }
 
 /**
- * @brief Proxy benchmark - GPU kernel initiates RDMA writes
+ * @brief Rank 0: launch write kernel and run proxy loop
  */
 template <typename Peer>
-struct ProxyBench {
-  int target;
+struct ProxyWrite {
   int iters;
 
   template <typename T>
-  BenchResult Write(Peer& peer, typename Peer::template Buffers<T>& write) {
-    auto ctx = write[target]->GetContext();
-    int* data = reinterpret_cast<int*>(write[target]->Data());
-    size_t size = write[target]->Size();
-    size_t len = size / sizeof(int);
+  void operator()(Peer& peer, typename Peer::template Buffers<T>& write) {
+    if (peer.mpi.GetWorldRank() != 0) return;
+
+    int world_size = peer.mpi.GetWorldSize();
+    auto ctx = write[1]->GetContext();
+    int* data = reinterpret_cast<int*>(write[1]->Data());
+    size_t len = write[1]->Size() / sizeof(int);
     auto& prop = peer.loc.GetGPUAffinity()[peer.device].prop;
 
     cudaLaunchConfig_t cfg{};
@@ -88,36 +93,38 @@ struct ProxyBench {
     cfg.gridDim = dim3((len + cfg.blockDim.x - 1) / cfg.blockDim.x, 1, 1);
     cfg.stream = peer.stream;
 
-    auto start = std::chrono::high_resolution_clock::now();
-    LAUNCH_KERNEL(&cfg, ProxyWriteKernel, ctx, target, len, data, 1ULL, iters);
-    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    LAUNCH_KERNEL(&cfg, ProxyWriteKernel, ctx, world_size, len, data, 1ULL, iters);
 
+    int total_ops = iters * (world_size - 1);
     ::Run([&]() -> Coro<> {
       int completed = 0;
       DeviceRequest req;
-      while (completed < iters) {
+      while (completed < total_ops) {
         if (ctx.queue->Pop(req)) {
-          co_await write[target]->Writeall(static_cast<int>(req.rank), req.imm);
-          write[target]->Complete();
-          fmt::print("\r  Progress: {}/{}", ++completed, iters);
+          co_await write[req.rank]->Writeall(static_cast<int>(req.rank), req.imm);
+          write[req.rank]->Complete();
+          fmt::print("\r  Progress: {}/{}", ++completed, total_ops);
         }
         co_await std::suspend_always{};
       }
       fmt::print("\n");
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
     }());
 
     CUDA_CHECK(cudaStreamSynchronize(peer.stream));
-    auto end = std::chrono::high_resolution_clock::now();
-
-    double time_us = std::chrono::duration<double, std::micro>(end - start).count();
-    double bw_gbps = (static_cast<double>(size) * iters * 8.0) / (time_us * 1000.0);
-
-    return {size, time_us / iters, bw_gbps, 0.0};
   }
+};
+
+/**
+ * @brief Rank 1..n: launch wait kernel and receive immdata
+ */
+template <typename Peer>
+struct ProxyRead {
+  int iters;
 
   template <typename T>
-  void Read(Peer& peer, typename Peer::template Buffers<T>& read) {
+  void operator()(Peer& peer, typename Peer::template Buffers<T>& read) {
+    if (peer.mpi.GetWorldRank() == 0) return;
+
     auto ctx = read[0]->GetContext();
     int* data = reinterpret_cast<int*>(read[0]->Data());
     size_t len = read[0]->Size() / sizeof(int);
@@ -125,35 +132,54 @@ struct ProxyBench {
 
     int* result;
     CUDA_CHECK(cudaMallocManaged(&result, sizeof(int)));
-    *result = 0;
+    *result = 1;
 
     cudaLaunchConfig_t cfg{};
     cfg.blockDim = dim3(prop.maxThreadsPerBlock, 1, 1);
     cfg.gridDim = dim3((len + cfg.blockDim.x - 1) / cfg.blockDim.x, 1, 1);
     cfg.stream = peer.stream;
 
-    LAUNCH_KERNEL(&cfg, ProxyWaitKernel, ctx, 0, len, data, iters, result);
+    LAUNCH_KERNEL(&cfg, ProxyWaitKernel, ctx, len, data, iters, result);
 
-    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
     ::Run([&]() -> Coro<> {
       for (int i = 0; i < iters; ++i) {
         co_await read[0]->WaitallImmdata(1);
         read[0]->Complete();
       }
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
     }());
 
     CUDA_CHECK(cudaStreamSynchronize(peer.stream));
     if (*result != 1) SPDLOG_ERROR("Verification failed on rank {}", peer.mpi.GetWorldRank());
     CUDA_CHECK(cudaFree(result));
   }
+};
+
+/**
+ * @brief Combined proxy benchmark
+ */
+template <typename Peer>
+struct ProxyBench {
+  int iters;
 
   template <typename T>
   BenchResult Run(Peer& peer, typename Peer::template Buffers<T>& write, typename Peer::template Buffers<T>& read) {
     int rank = peer.mpi.GetWorldRank();
-    if (rank == 0) return Write(peer, write);
-    if (rank == target) Read(peer, read);
-    return {write[target]->Size(), 0, 0, 0};
+    int world_size = peer.mpi.GetWorldSize();
+    size_t size = (rank == 0) ? write[1]->Size() : read[0]->Size();
+
+    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+
+    auto start = std::chrono::high_resolution_clock::now();
+    ProxyWrite<Peer>{iters}.template operator()<T>(peer, write);
+    ProxyRead<Peer>{iters}.template operator()<T>(peer, read);
+    auto end = std::chrono::high_resolution_clock::now();
+
+    for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+
+    double time_us = std::chrono::duration<double, std::micro>(end - start).count();
+    double bw_gbps = (rank == 0) ? (static_cast<double>(size) * iters * (world_size - 1) * 8.0) / (time_us * 1000.0) : 0;
+
+    return {size, time_us / iters, bw_gbps, 0.0};
   }
 };
 
@@ -167,25 +193,15 @@ struct Test {
     peer.Exchange();
     peer.Connect();
     int rank = peer.mpi.GetWorldRank();
-    int world = peer.mpi.GetWorldSize();
 
     auto [write, read] = peer.AllocPair<BufType>(size);
     peer.Handshake(write, read);
 
-    double sum_bw = 0;
-    double sum_time = 0;
-    for (int t = 1; t < world; ++t) {
-      auto r = ProxyBench<FabricBench>{t, opts.repeat}.Run(peer, write, read);
-      MPI_Barrier(MPI_COMM_WORLD);
-      if (rank == 0) {
-        sum_bw += r.bw_gbps;
-        sum_time += r.time_us;
-      }
-    }
-    int npairs = world - 1;
-    double avg_bw = sum_bw / npairs;
-    double bus_bw = (total_bw > 0) ? (avg_bw / total_bw) * 100.0 : 0;
-    return {size, sum_time / npairs, avg_bw, bus_bw};
+    auto r = ProxyBench<FabricBench>{opts.repeat}.Run(peer, write, read);
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    double bus_bw = (total_bw > 0) ? (r.bw_gbps / total_bw) * 100.0 : 0;
+    return {size, r.time_us, r.bw_gbps, bus_bw};
   }
 };
 
