@@ -4,6 +4,9 @@
 #include <cuda/std/atomic>
 #include <device/common.cuh>
 
+/// Cache line size for alignment (128 bytes covers both CPU 64B and GPU 128B cache lines)
+inline constexpr size_t kCacheLineSize = 128;
+
 /**
  * Lock-free bounded Multi-Producer Multi-Consumer (MPMC) queue.
  *
@@ -43,9 +46,6 @@
  *
  * @tparam T The type of elements stored in the queue. Must be trivially copyable.
  */
-/// Cache line size for alignment (128 bytes covers both CPU 64B and GPU 128B cache lines)
-inline constexpr size_t kCacheLineSize = 128;
-
 template <typename T>
 struct alignas(kCacheLineSize) Queue {
   /// Default queue capacity (must be power of two)
