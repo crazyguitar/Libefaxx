@@ -62,9 +62,7 @@ __global__ void ProxyWriteKernel(DeviceContext ctx, int world_size, size_t len, 
 
 /** @brief Kernel for rank 1..n: wait and verify */
 __global__ void ProxyWaitKernel(DeviceContext ctx, size_t len, int* data, int iters, int* result) {
-  for (int i = 0; i < iters; ++i) {
-    DeviceWait(ctx);
-  }
+  for (int i = 0; i < iters; ++i) DeviceWait(ctx);
   bool ok = DeviceVerify(0, len, data);
   if (threadIdx.x == 0 && blockIdx.x == 0) *result = ok ? 1 : 0;
 }
