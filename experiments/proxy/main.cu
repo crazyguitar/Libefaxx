@@ -85,7 +85,8 @@ struct ProxyWrite {
     int world_size = peer.mpi.GetWorldSize();
     auto ctx = write[1]->GetContext();
     int* data = reinterpret_cast<int*>(write[1]->Data());
-    size_t len = write[1]->Size() / sizeof(int);
+    size_t size = write[1]->Size();
+    size_t len = size / sizeof(int);
     auto& prop = peer.loc.GetGPUAffinity()[peer.device].prop;
 
     cudaLaunchConfig_t cfg{};
@@ -96,6 +97,9 @@ struct ProxyWrite {
     LAUNCH_KERNEL(&cfg, ProxyWriteKernel, ctx, world_size, len, data, 1ULL, iters);
 
     int total_ops = iters * (world_size - 1);
+    size_t total_bw = peer.GetTotalBandwidth();
+    Progress progress(total_ops, total_bw);
+
     ::Run([&]() -> Coro<> {
       int completed = 0;
       DeviceRequest req;
@@ -103,11 +107,11 @@ struct ProxyWrite {
         if (ctx.queue->Pop(req)) {
           co_await write[req.rank]->Writeall(static_cast<int>(req.rank), req.imm);
           write[req.rank]->Complete();
-          fmt::print("\r  Progress: {}/{}", ++completed, total_ops);
+          ++completed;
+          if (completed % 10 == 0) progress.Print(std::chrono::high_resolution_clock::now(), size, completed);
         }
         co_await std::suspend_always{};
       }
-      fmt::print("\n");
     }());
 
     CUDA_CHECK(cudaStreamSynchronize(peer.stream));
