@@ -76,6 +76,60 @@ static constexpr uint16_t NVIDIA_VENDOR_ID = 0x10de;
 /** @brief AMD PCI vendor ID */
 static constexpr uint16_t AMD_VENDOR_ID = 0x1002;
 
+/**
+ * @brief CUDA memory support detection (DMA-BUF and GDR)
+ *
+ * Detects GPU memory export capabilities for RDMA:
+ * - DMA-BUF: Modern Linux kernel interface for GPU memory export
+ * - GDR (GPUDirect RDMA): NVIDIA's peer-to-peer memory access
+ *
+ * Note: On Blackwell (compute capability >= 10), GDR via nv-p2p is deprecated.
+ *
+ * Reference: libfabric fabtests/common/hmem_cuda.c
+ */
+struct CUDAMemorySupport {
+  bool dmabuf = false;  ///< DMA-BUF supported
+  bool gdr = false;     ///< GPUDirect RDMA supported
+  int cc_major = 0;     ///< Compute capability major
+  int cc_minor = 0;     ///< Compute capability minor
+
+  /**
+   * @brief Detect memory support for a specific CUDA device
+   * @param device CUDA device index
+   * @return CUDAMemorySupport with detected capabilities
+   */
+  static CUDAMemorySupport Detect(int device = 0) {
+    CUDAMemorySupport support;
+    cudaDeviceProp prop;
+    if (cudaGetDeviceProperties(&prop, device) != cudaSuccess) return support;
+
+    support.cc_major = prop.major;
+    support.cc_minor = prop.minor;
+
+    int dmabuf_attr = 0, gdr_attr = 0;
+    // Use raw attribute values for compatibility with older CUDA versions
+    // 123 = cudaDevAttrDmaBufSupported (CUDA 11.7+)
+    // 124 = cudaDevAttrGPUDirectRDMASupported
+    cudaDeviceGetAttribute(&dmabuf_attr, static_cast<cudaDeviceAttr>(123), device);
+    cudaDeviceGetAttribute(&gdr_attr, static_cast<cudaDeviceAttr>(124), device);
+    cudaGetLastError();  // Clear any errors from unsupported attributes
+    support.dmabuf = (dmabuf_attr == 1);
+    support.gdr = (support.cc_major < 10) && (gdr_attr == 1);  // Blackwell deprecates nv-p2p
+    return support;
+  }
+
+  /**
+   * @brief Get memory support status string
+   * @return Human-readable status string
+   */
+  [[nodiscard]] const char* Status() const noexcept {
+    if (gdr && dmabuf) return "DMA-BUF + GDR";
+    if (dmabuf) return "DMA-BUF only";
+    if (gdr) return "GDR only";
+    return "Not supported";
+  }
+};
+
 using pci_type = std::unordered_set<hwloc_obj_t>;
 
 /**
@@ -113,77 +167,75 @@ class Hwloc : private NoCopy {
    * @brief Get discovered NUMA nodes
    * @return Reference to vector of NUMA nodes
    */
-  const std::vector<Numanode>& GetNumaNodes() const noexcept { return numanodes_; }
+  [[nodiscard]] const std::vector<Numanode>& GetNumaNodes() const noexcept { return numanodes_; }
 
   /**
    * @brief Check if object is a CPU package
    * @param l hwloc object to check
    * @return true if object is a package
    */
-  inline static bool IsPackage(hwloc_obj_t l) { return l->type == HWLOC_OBJ_PACKAGE; }
+  [[nodiscard]] inline static bool IsPackage(hwloc_obj_t l) noexcept { return l->type == HWLOC_OBJ_PACKAGE; }
 
   /**
    * @brief Check if object is a NUMA node
    * @param l hwloc object to check
    * @return true if object is a NUMA node
    */
-  inline static bool IsNumaNode(hwloc_obj_t l) { return l->type == HWLOC_OBJ_NUMANODE; }
+  [[nodiscard]] inline static bool IsNumaNode(hwloc_obj_t l) noexcept { return l->type == HWLOC_OBJ_NUMANODE; }
 
   /**
    * @brief Check if object is a CPU core
    * @param l hwloc object to check
    * @return true if object is a core
    */
-  inline static bool IsCore(hwloc_obj_t l) { return l->type == HWLOC_OBJ_CORE; }
+  [[nodiscard]] inline static bool IsCore(hwloc_obj_t l) noexcept { return l->type == HWLOC_OBJ_CORE; }
 
   /**
    * @brief Check if object is a PCI device
    * @param l hwloc object to check
    * @return true if object is a PCI device
    */
-  inline static bool IsPCI(hwloc_obj_t l) { return l->type == HWLOC_OBJ_PCI_DEVICE; }
+  [[nodiscard]] inline static bool IsPCI(hwloc_obj_t l) noexcept { return l->type == HWLOC_OBJ_PCI_DEVICE; }
 
   /**
    * @brief Check if object is a host bridge
    * @param l hwloc object to check
    * @return true if object is a host bridge
    */
-  inline static bool IsHostBridge(hwloc_obj_t l) {
+  [[nodiscard]] inline static bool IsHostBridge(hwloc_obj_t l) noexcept {
     if (l->type != HWLOC_OBJ_BRIDGE) return false;
     return l->attr->bridge.upstream_type != HWLOC_OBJ_BRIDGE_PCI;
   }
 
   /**
-   * @brief Check if PCI device is an EFA adapter
+   * @brief Check if object is an EFA device
    * @param l hwloc object to check
    * @return true if object is an EFA device
    */
-  inline static bool IsEFA(hwloc_obj_t l) {
+  [[nodiscard]] inline static bool IsEFA(hwloc_obj_t l) noexcept {
     if (l->type != HWLOC_OBJ_PCI_DEVICE) return false;
     return IsOSDevType(HWLOC_OBJ_OSDEV_OPENFABRICS, l);
   }
 
   /**
-   * @brief Check if PCI device is an NVIDIA GPU
+   * @brief Check if object is an NVIDIA GPU
    * @param l hwloc object to check
    * @return true if object is an NVIDIA GPU
    */
-  inline static bool IsGPU(hwloc_obj_t l) {
+  [[nodiscard]] inline static bool IsGPU(hwloc_obj_t l) noexcept {
     if (l->type != HWLOC_OBJ_PCI_DEVICE) return false;
     auto class_id = l->attr->pcidev.class_id >> 8;
     if (class_id != 0x03) return false;
-    auto vendor_id = l->attr->pcidev.vendor_id;
-    if (vendor_id != NVIDIA_VENDOR_ID) return false;
-    return true;
+    return l->attr->pcidev.vendor_id == NVIDIA_VENDOR_ID;
   }
 
   /**
-   * @brief Check if object has OS device of specified type
+   * @brief Check if object or its children contain an OS device of the specified type
    * @param type OS device type to check for
    * @param l hwloc object to check
-   * @return true if object has the specified OS device type
+   * @return true if object or children contain the specified OS device type
    */
-  static bool IsOSDevType(hwloc_obj_osdev_type_e type, hwloc_obj_t l) {
+  [[nodiscard]] static bool IsOSDevType(hwloc_obj_osdev_type_e type, hwloc_obj_t l) noexcept {
     if (!l) return false;
     if (l->attr->osdev.type == type) return true;
     for (hwloc_obj_t child = l->memory_first_child; !!child; child = child->next_sibling) {
@@ -258,11 +310,12 @@ class Hwloc : private NoCopy {
  * to access device information even when hwloc matching fails.
  */
 struct GPUAffinity {
-  hwloc_obj_t gpu = nullptr;       ///< GPU device object (nullptr if not matched)
-  hwloc_obj_t numanode = nullptr;  ///< Associated NUMA node (nullptr if not matched)
-  std::vector<hwloc_obj_t> cores;  ///< CPU cores in the same NUMA node
-  std::vector<hwloc_obj_t> efas;   ///< EFA devices on the same PCI bridge
-  cudaDeviceProp prop = {};        ///< CUDA device properties (always populated)
+  hwloc_obj_t gpu = nullptr;        ///< GPU device object (nullptr if not matched)
+  hwloc_obj_t numanode = nullptr;   ///< Associated NUMA node (nullptr if not matched)
+  std::vector<hwloc_obj_t> cores;   ///< CPU cores in the same NUMA node
+  std::vector<hwloc_obj_t> efas;    ///< EFA devices on the same PCI bridge
+  cudaDeviceProp prop = {};         ///< CUDA device properties (always populated)
+  CUDAMemorySupport mem_support{};  ///< Memory export support (DMA-BUF/GDR)
 };
 
 /**
@@ -287,6 +340,12 @@ struct GPUAffinity {
 inline std::ostream& operator<<(std::ostream& os, const GPUAffinity& affinity) {
   // Print CUDA PCI address from stored device properties
   os << fmt::format("  CUDA PCI:     {:04x}:{:02x}:{:02x}\n", affinity.prop.pciDomainID, affinity.prop.pciBusID, affinity.prop.pciDeviceID);
+
+  // Print compute capability and memory support
+  os << fmt::format("  Compute Cap:  {}.{}\n", affinity.mem_support.cc_major, affinity.mem_support.cc_minor);
+  os << fmt::format(
+      "  Mem Support:  {} (DMA-BUF={}, GDR={})\n", affinity.mem_support.Status(), affinity.mem_support.dmabuf, affinity.mem_support.gdr
+  );
 
   if (affinity.gpu) {
     // Print hwloc PCI address
@@ -347,9 +406,13 @@ class GPUloc : private NoCopy {
    * @brief Get GPU affinity mapping
    * @return Reference to GPU affinity map
    */
-  const affinity_type& GetGPUAffinity() const noexcept { return affinity_; }
+  [[nodiscard]] const affinity_type& GetGPUAffinity() const noexcept { return affinity_; }
 
-  inline static const GPUloc& Get() {
+  /**
+   * @brief Get singleton instance of GPUloc
+   * @return Reference to global GPUloc instance
+   */
+  [[nodiscard]] inline static const GPUloc& Get() {
     static GPUloc loc;
     return loc;
   }
@@ -412,8 +475,9 @@ class GPUloc : private NoCopy {
         if (static_cast<int>(gpu->attr->pcidev.domain) == cudaDomain && static_cast<int>(gpu->attr->pcidev.bus) == cudaBus &&
             static_cast<int>(gpu->attr->pcidev.dev) == cudaDev) {
           affinity[static_cast<size_t>(dev)] = loc;
-          // Store the CUDA device properties in the affinity entry
+          // Store the CUDA device properties and memory support in the affinity entry
           affinity[static_cast<size_t>(dev)].prop = prop;
+          affinity[static_cast<size_t>(dev)].mem_support = CUDAMemorySupport::Detect(dev);
           matched = true;
           matchedCount++;
           break;
@@ -422,9 +486,9 @@ class GPUloc : private NoCopy {
 
       if (!matched) {
         SPDLOG_WARN("Could not find hwloc match for CUDA device {} (PCI {:04x}:{:02x}:{:02x})", dev, cudaDomain, cudaBus, cudaDev);
-        // Even for unmatched devices, store the device properties
-        // The affinity entry already has default values (nullptr, empty vectors)
+        // Even for unmatched devices, store the device properties and memory support
         affinity[static_cast<size_t>(dev)].prop = prop;
+        affinity[static_cast<size_t>(dev)].mem_support = CUDAMemorySupport::Detect(dev);
       }
     }
 
