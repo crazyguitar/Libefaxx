@@ -76,6 +76,56 @@ static constexpr uint16_t NVIDIA_VENDOR_ID = 0x10de;
 /** @brief AMD PCI vendor ID */
 static constexpr uint16_t AMD_VENDOR_ID = 0x1002;
 
+/**
+ * @brief CUDA memory support detection (DMA-BUF and GDR)
+ *
+ * Detects GPU memory export capabilities for RDMA:
+ * - DMA-BUF: Modern Linux kernel interface for GPU memory export
+ * - GDR (GPUDirect RDMA): NVIDIA's peer-to-peer memory access
+ *
+ * Note: On Blackwell (compute capability >= 10), GDR via nv-p2p is deprecated.
+ *
+ * Reference: libfabric fabtests/common/hmem_cuda.c
+ */
+struct CUDAMemorySupport {
+  bool dmabuf = false;  ///< DMA-BUF supported
+  bool gdr = false;     ///< GPUDirect RDMA supported
+  int cc_major = 0;     ///< Compute capability major
+  int cc_minor = 0;     ///< Compute capability minor
+
+  /**
+   * @brief Detect memory support for a specific CUDA device
+   * @param device CUDA device index
+   * @return CUDAMemorySupport with detected capabilities
+   */
+  static CUDAMemorySupport Detect(int device = 0) {
+    CUDAMemorySupport support;
+    cudaDeviceProp prop;
+    if (cudaGetDeviceProperties(&prop, device) != cudaSuccess) return support;
+
+    support.cc_major = prop.major;
+    support.cc_minor = prop.minor;
+
+    int dmabuf_attr = 0, gdr_attr = 0;
+    // Use raw attribute values for compatibility with older CUDA versions
+    // 123 = cudaDevAttrDmaBufSupported (CUDA 11.7+)
+    // 124 = cudaDevAttrGPUDirectRDMASupported
+    cudaDeviceGetAttribute(&dmabuf_attr, static_cast<cudaDeviceAttr>(123), device);
+    cudaDeviceGetAttribute(&gdr_attr, static_cast<cudaDeviceAttr>(124), device);
+    cudaGetLastError();  // Clear any errors from unsupported attributes
+    support.dmabuf = (dmabuf_attr == 1);
+    support.gdr = (support.cc_major < 10) && (gdr_attr == 1);  // Blackwell deprecates nv-p2p
+    return support;
+  }
+
+  const char* Status() const {
+    if (gdr && dmabuf) return "DMA-BUF + GDR";
+    if (dmabuf) return "DMA-BUF only";
+    if (gdr) return "GDR only";
+    return "Not supported";
+  }
+};
+
 using pci_type = std::unordered_set<hwloc_obj_t>;
 
 /**
@@ -258,11 +308,12 @@ class Hwloc : private NoCopy {
  * to access device information even when hwloc matching fails.
  */
 struct GPUAffinity {
-  hwloc_obj_t gpu = nullptr;       ///< GPU device object (nullptr if not matched)
-  hwloc_obj_t numanode = nullptr;  ///< Associated NUMA node (nullptr if not matched)
-  std::vector<hwloc_obj_t> cores;  ///< CPU cores in the same NUMA node
-  std::vector<hwloc_obj_t> efas;   ///< EFA devices on the same PCI bridge
-  cudaDeviceProp prop = {};        ///< CUDA device properties (always populated)
+  hwloc_obj_t gpu = nullptr;        ///< GPU device object (nullptr if not matched)
+  hwloc_obj_t numanode = nullptr;   ///< Associated NUMA node (nullptr if not matched)
+  std::vector<hwloc_obj_t> cores;   ///< CPU cores in the same NUMA node
+  std::vector<hwloc_obj_t> efas;    ///< EFA devices on the same PCI bridge
+  cudaDeviceProp prop = {};         ///< CUDA device properties (always populated)
+  CUDAMemorySupport mem_support{};  ///< Memory export support (DMA-BUF/GDR)
 };
 
 /**
@@ -287,6 +338,12 @@ struct GPUAffinity {
 inline std::ostream& operator<<(std::ostream& os, const GPUAffinity& affinity) {
   // Print CUDA PCI address from stored device properties
   os << fmt::format("  CUDA PCI:     {:04x}:{:02x}:{:02x}\n", affinity.prop.pciDomainID, affinity.prop.pciBusID, affinity.prop.pciDeviceID);
+
+  // Print compute capability and memory support
+  os << fmt::format("  Compute Cap:  {}.{}\n", affinity.mem_support.cc_major, affinity.mem_support.cc_minor);
+  os << fmt::format(
+      "  Mem Support:  {} (DMA-BUF={}, GDR={})\n", affinity.mem_support.Status(), affinity.mem_support.dmabuf, affinity.mem_support.gdr
+  );
 
   if (affinity.gpu) {
     // Print hwloc PCI address
@@ -412,8 +469,9 @@ class GPUloc : private NoCopy {
         if (static_cast<int>(gpu->attr->pcidev.domain) == cudaDomain && static_cast<int>(gpu->attr->pcidev.bus) == cudaBus &&
             static_cast<int>(gpu->attr->pcidev.dev) == cudaDev) {
           affinity[static_cast<size_t>(dev)] = loc;
-          // Store the CUDA device properties in the affinity entry
+          // Store the CUDA device properties and memory support in the affinity entry
           affinity[static_cast<size_t>(dev)].prop = prop;
+          affinity[static_cast<size_t>(dev)].mem_support = CUDAMemorySupport::Detect(dev);
           matched = true;
           matchedCount++;
           break;
@@ -422,9 +480,9 @@ class GPUloc : private NoCopy {
 
       if (!matched) {
         SPDLOG_WARN("Could not find hwloc match for CUDA device {} (PCI {:04x}:{:02x}:{:02x})", dev, cudaDomain, cudaBus, cudaDev);
-        // Even for unmatched devices, store the device properties
-        // The affinity entry already has default values (nullptr, empty vectors)
+        // Even for unmatched devices, store the device properties and memory support
         affinity[static_cast<size_t>(dev)].prop = prop;
+        affinity[static_cast<size_t>(dev)].mem_support = CUDAMemorySupport::Detect(dev);
       }
     }
 
