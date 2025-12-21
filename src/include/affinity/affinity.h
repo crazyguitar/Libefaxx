@@ -118,7 +118,11 @@ struct CUDAMemorySupport {
     return support;
   }
 
-  const char* Status() const {
+  /**
+   * @brief Get memory support status string
+   * @return Human-readable status string
+   */
+  [[nodiscard]] const char* Status() const noexcept {
     if (gdr && dmabuf) return "DMA-BUF + GDR";
     if (dmabuf) return "DMA-BUF only";
     if (gdr) return "GDR only";
@@ -163,77 +167,75 @@ class Hwloc : private NoCopy {
    * @brief Get discovered NUMA nodes
    * @return Reference to vector of NUMA nodes
    */
-  const std::vector<Numanode>& GetNumaNodes() const noexcept { return numanodes_; }
+  [[nodiscard]] const std::vector<Numanode>& GetNumaNodes() const noexcept { return numanodes_; }
 
   /**
    * @brief Check if object is a CPU package
    * @param l hwloc object to check
    * @return true if object is a package
    */
-  inline static bool IsPackage(hwloc_obj_t l) { return l->type == HWLOC_OBJ_PACKAGE; }
+  [[nodiscard]] inline static bool IsPackage(hwloc_obj_t l) noexcept { return l->type == HWLOC_OBJ_PACKAGE; }
 
   /**
    * @brief Check if object is a NUMA node
    * @param l hwloc object to check
    * @return true if object is a NUMA node
    */
-  inline static bool IsNumaNode(hwloc_obj_t l) { return l->type == HWLOC_OBJ_NUMANODE; }
+  [[nodiscard]] inline static bool IsNumaNode(hwloc_obj_t l) noexcept { return l->type == HWLOC_OBJ_NUMANODE; }
 
   /**
    * @brief Check if object is a CPU core
    * @param l hwloc object to check
    * @return true if object is a core
    */
-  inline static bool IsCore(hwloc_obj_t l) { return l->type == HWLOC_OBJ_CORE; }
+  [[nodiscard]] inline static bool IsCore(hwloc_obj_t l) noexcept { return l->type == HWLOC_OBJ_CORE; }
 
   /**
    * @brief Check if object is a PCI device
    * @param l hwloc object to check
    * @return true if object is a PCI device
    */
-  inline static bool IsPCI(hwloc_obj_t l) { return l->type == HWLOC_OBJ_PCI_DEVICE; }
+  [[nodiscard]] inline static bool IsPCI(hwloc_obj_t l) noexcept { return l->type == HWLOC_OBJ_PCI_DEVICE; }
 
   /**
    * @brief Check if object is a host bridge
    * @param l hwloc object to check
    * @return true if object is a host bridge
    */
-  inline static bool IsHostBridge(hwloc_obj_t l) {
+  [[nodiscard]] inline static bool IsHostBridge(hwloc_obj_t l) noexcept {
     if (l->type != HWLOC_OBJ_BRIDGE) return false;
     return l->attr->bridge.upstream_type != HWLOC_OBJ_BRIDGE_PCI;
   }
 
   /**
-   * @brief Check if PCI device is an EFA adapter
+   * @brief Check if object is an EFA device
    * @param l hwloc object to check
    * @return true if object is an EFA device
    */
-  inline static bool IsEFA(hwloc_obj_t l) {
+  [[nodiscard]] inline static bool IsEFA(hwloc_obj_t l) noexcept {
     if (l->type != HWLOC_OBJ_PCI_DEVICE) return false;
     return IsOSDevType(HWLOC_OBJ_OSDEV_OPENFABRICS, l);
   }
 
   /**
-   * @brief Check if PCI device is an NVIDIA GPU
+   * @brief Check if object is an NVIDIA GPU
    * @param l hwloc object to check
    * @return true if object is an NVIDIA GPU
    */
-  inline static bool IsGPU(hwloc_obj_t l) {
+  [[nodiscard]] inline static bool IsGPU(hwloc_obj_t l) noexcept {
     if (l->type != HWLOC_OBJ_PCI_DEVICE) return false;
     auto class_id = l->attr->pcidev.class_id >> 8;
     if (class_id != 0x03) return false;
-    auto vendor_id = l->attr->pcidev.vendor_id;
-    if (vendor_id != NVIDIA_VENDOR_ID) return false;
-    return true;
+    return l->attr->pcidev.vendor_id == NVIDIA_VENDOR_ID;
   }
 
   /**
-   * @brief Check if object has OS device of specified type
+   * @brief Check if object or its children contain an OS device of the specified type
    * @param type OS device type to check for
    * @param l hwloc object to check
-   * @return true if object has the specified OS device type
+   * @return true if object or children contain the specified OS device type
    */
-  static bool IsOSDevType(hwloc_obj_osdev_type_e type, hwloc_obj_t l) {
+  [[nodiscard]] static bool IsOSDevType(hwloc_obj_osdev_type_e type, hwloc_obj_t l) noexcept {
     if (!l) return false;
     if (l->attr->osdev.type == type) return true;
     for (hwloc_obj_t child = l->memory_first_child; !!child; child = child->next_sibling) {
@@ -404,9 +406,13 @@ class GPUloc : private NoCopy {
    * @brief Get GPU affinity mapping
    * @return Reference to GPU affinity map
    */
-  const affinity_type& GetGPUAffinity() const noexcept { return affinity_; }
+  [[nodiscard]] const affinity_type& GetGPUAffinity() const noexcept { return affinity_; }
 
-  inline static const GPUloc& Get() {
+  /**
+   * @brief Get singleton instance of GPUloc
+   * @return Reference to global GPUloc instance
+   */
+  [[nodiscard]] inline static const GPUloc& Get() {
     static GPUloc loc;
     return loc;
   }
