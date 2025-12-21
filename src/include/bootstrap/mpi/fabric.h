@@ -12,7 +12,6 @@
 #include <rdma/fabric/channel.h>
 #include <rdma/fabric/efa.h>
 #include <rdma/fabric/selector.h>
-#include <rdma/proxy.h>
 
 #include <array>
 #include <cstring>
@@ -44,7 +43,7 @@ class Peer : private NoCopy {
     addrs.resize(world_size);
     auto& affinity = loc.GetGPUAffinity()[device];
     Taskset::Set(affinity.cores[device]->logical_index);
-    IO::Get().Set(std::make_unique<FabricProxy>());
+    IO::Get().Set(std::make_unique<FabricSelector>());
     efas.reserve(affinity.efas.size());
     for (auto e : affinity.efas) efas.emplace_back(EFA(e));
   }

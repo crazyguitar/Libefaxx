@@ -8,12 +8,12 @@
 #pragma once
 
 #include <bootstrap/mpi/mpi.h>
-#include <io/selector.h>
 #include <rdma/fabric/buffer.h>
 #include <rdma/fabric/request.h>
 
 #include <algorithm>
 #include <queue/queue.cuh>
+#include <type_traits>
 
 /**
  * @brief Symmetric memory class with 2D RMA IOV structure
@@ -37,6 +37,19 @@ class SymmetricMemory : public BufferType {
   SymmetricMemory(std::vector<Channel>& channels, size_t size, int world_size, int device = -1, size_t align = BufferType::kAlign)
       : BufferType(channels, device, size, align), world_size_(world_size) {
     rma_iovs_.resize(world_size_);
+    if constexpr (!std::is_same_v<BufferType, HostBuffer>) {
+      CUDA_CHECK(cudaMallocManaged(&posted_, sizeof(uint64_t)));
+      CUDA_CHECK(cudaMallocManaged(&completed_, sizeof(uint64_t)));
+      *posted_ = 0;
+      *completed_ = 0;
+    }
+  }
+
+  ~SymmetricMemory() {
+    if constexpr (!std::is_same_v<BufferType, HostBuffer>) {
+      if (posted_) cudaFree(posted_);
+      if (completed_) cudaFree(completed_);
+    }
   }
 
   /**
@@ -169,12 +182,27 @@ class SymmetricMemory : public BufferType {
     }
   }
 
+  /** @brief Get queue pointer for CUDA kernel access */
+  [[nodiscard]] Queue<DeviceRequest>* GetQueue() noexcept { return &queue_; }
+
+  /** @brief Get posted counter pointer for CUDA kernel access */
+  [[nodiscard]] uint64_t* GetPosted() noexcept { return posted_; }
+
+  /** @brief Get completed counter pointer for CUDA kernel access */
+  [[nodiscard]] uint64_t* GetCompleted() noexcept { return completed_; }
+
+  /** @brief Get device context for CUDA kernel access */
+  [[nodiscard]] DeviceContext GetContext() noexcept { return {&queue_, posted_, completed_}; }
+
+  /** @brief Increment completed counter (called by CPU after RDMA completion) */
+  void Complete() noexcept { (*completed_)++; }
+
  private:
   int world_size_;                                 ///< Number of ranks in the world
   std::vector<std::vector<fi_rma_iov>> rma_iovs_;  ///< 2D RMA IOVs: [rank][channel]
   Queue<DeviceRequest> queue_;                     ///< GPU request queue
-  std::vector<DeviceRequest> requests_;            ///< Pending requests
-  Handle* handle_ = nullptr;                       ///< Waiting coroutine handle
+  uint64_t* posted_ = nullptr;                     ///< Posted operations counter (managed memory)
+  uint64_t* completed_ = nullptr;                  ///< Completed operations counter (managed memory)
 };
 
 /** @brief Symmetric memory with DMABUF for GPU direct access */
