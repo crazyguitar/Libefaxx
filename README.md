@@ -154,4 +154,5 @@ Tsai, C.-N. (2025). *AWS EFA GPU Benchmark* (Version 1.0.0) [Computer software].
 3. S. Liu et al., "GPU-Initiated Networking," arXiv:2511.15076, 2025. [\[link\]](https://arxiv.org/abs/2511.15076)
 4. Netcan, "asyncio: C++20 coroutine library," GitHub. [\[link\]](https://github.com/netcan/asyncio)
 5. UCCL Project, "UCCL: User-space Collective Communication Library," GitHub. [\[link\]](https://github.com/uccl-project/uccl)
-6. DeepSeek-AI, "DeepEP: Expert parallelism with GPU-initiated communication," GitHub. [\[link\]](https://github.com/deepseek-ai/DeepEP)
+6. Microsoft, "MSCCL++: Multi-Scale Collective Communication Library," GitHub. [\[link\]](https://github.com/microsoft/mscclpp)
+7. DeepSeek-AI, "DeepEP: Expert parallelism with GPU-initiated communication," GitHub. [\[link\]](https://github.com/deepseek-ai/DeepEP)
