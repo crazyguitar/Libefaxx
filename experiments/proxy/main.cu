@@ -71,8 +71,9 @@ __global__ void ProxyWaitKernel(DeviceContext ctx, int rank, size_t len, int* da
 
 /**
  * @brief Rank 0: launch write kernel and run proxy loop
+ * @tparam MultiChannel If true, use all channels; if false, use single channel
  */
-template <typename Peer>
+template <typename Peer, bool MultiChannel = true>
 struct ProxyWrite {
   int iters;
 
@@ -96,7 +97,7 @@ struct ProxyWrite {
     LAUNCH_KERNEL(&cfg, ProxyWriteKernel, ctx, world_size, len, data, 1ULL, iters);
 
     int total_ops = iters * (world_size - 1);
-    size_t total_bw = peer.GetTotalBandwidth();
+    size_t total_bw = MultiChannel ? peer.GetTotalBandwidth() : peer.GetBandwidth(0);
     Progress progress(total_ops, total_bw);
 
     ::Run([&]() -> Coro<> {
@@ -104,7 +105,11 @@ struct ProxyWrite {
       DeviceRequest req;
       while (completed < total_ops) {
         if (ctx.queue->Pop(req)) {
-          co_await write[req.rank]->Writeall(static_cast<int>(req.rank), req.imm);
+          if constexpr (MultiChannel) {
+            co_await write[req.rank]->Writeall(static_cast<int>(req.rank), req.imm);
+          } else {
+            co_await write[req.rank]->Writeall(static_cast<int>(req.rank), req.imm, 0);
+          }
           write[req.rank]->Complete();
           ++completed;
           if (completed % 10 == 0) progress.Print(std::chrono::high_resolution_clock::now(), size, completed);
@@ -120,8 +125,9 @@ struct ProxyWrite {
 
 /**
  * @brief Rank 1..n: launch wait kernel and receive immdata
+ * @tparam MultiChannel If true, wait on all channels; if false, wait on single channel
  */
-template <typename Peer>
+template <typename Peer, bool MultiChannel = true>
 struct ProxyRead {
   int iters;
 
@@ -148,7 +154,11 @@ struct ProxyRead {
 
     ::Run([&]() -> Coro<> {
       for (int i = 0; i < iters; ++i) {
-        co_await read[0]->WaitallImmdata(1);
+        if constexpr (MultiChannel) {
+          co_await read[0]->WaitallImmdata(1);
+        } else {
+          co_await read[0]->WaitImmdata(1);
+        }
         read[0]->Complete();
       }
       for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
@@ -162,8 +172,9 @@ struct ProxyRead {
 
 /**
  * @brief Combined proxy benchmark
+ * @tparam MultiChannel If true, use all channels; if false, use single channel
  */
-template <typename Peer>
+template <typename Peer, bool MultiChannel = true>
 struct ProxyBench {
   int iters;
 
@@ -176,8 +187,8 @@ struct ProxyBench {
     for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
 
     auto start = std::chrono::high_resolution_clock::now();
-    ProxyWrite<Peer>{iters}.template operator()<T>(peer, write);
-    ProxyRead<Peer>{iters}.template operator()<T>(peer, read);
+    ProxyWrite<Peer, MultiChannel>{iters}.template operator()<T>(peer, write);
+    ProxyRead<Peer, MultiChannel>{iters}.template operator()<T>(peer, read);
     auto end = std::chrono::high_resolution_clock::now();
 
     double time_us = std::chrono::duration<double, std::micro>(end - start).count();
@@ -189,8 +200,10 @@ struct ProxyBench {
 
 /**
  * @brief Test runner for proxy benchmark
+ * @tparam BufType Buffer type (e.g., SymmetricDMAMemory)
+ * @tparam MultiChannel If true, use all channels; if false, use single channel
  */
-template <typename BufType>
+template <typename BufType, bool MultiChannel = true>
 struct Test {
   static BenchResult Run(size_t size, const Options& opts, double single_bw, double total_bw) {
     FabricBench peer;
@@ -200,10 +213,11 @@ struct Test {
     auto [write, read] = peer.AllocPair<BufType>(size);
     peer.Handshake(write, read);
 
-    auto r = ProxyBench<FabricBench>{opts.repeat}.Run(peer, write, read);
+    auto r = ProxyBench<FabricBench, MultiChannel>{opts.repeat}.Run(peer, write, read);
     MPI_Barrier(MPI_COMM_WORLD);
 
-    double bus_bw = (total_bw > 0) ? (r.bw_gbps / total_bw) * 100.0 : 0;
+    double link_bw = MultiChannel ? total_bw : single_bw;
+    double bus_bw = (link_bw > 0) ? (r.bw_gbps / link_bw) * 100.0 : 0;
     return {size, r.time_us, r.bw_gbps, bus_bw};
   }
 };
@@ -216,7 +230,8 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
   return results;
 }
 
-using ProxyDMA = Test<SymmetricDMAMemory>;
+using ProxySingle = Test<SymmetricDMAMemory, false>;
+using ProxyMulti = Test<SymmetricDMAMemory, true>;
 
 int main(int argc, char* argv[]) {
   try {
@@ -229,15 +244,15 @@ int main(int argc, char* argv[]) {
     double single_bw = peer.GetBandwidth(0) / 1e9;
     double total_bw = peer.GetTotalBandwidth() / 1e9;
 
-    std::vector<std::array<BenchResult, 1>> results;
+    std::vector<std::array<BenchResult, 2>> results;
     for (auto size : sizes) {
-      results.push_back(RunTests<ProxyDMA>(size, opts, single_bw, total_bw));
+      results.push_back(RunTests<ProxySingle, ProxyMulti>(size, opts, single_bw, total_bw));
     }
 
     if (rank == 0) {
       FabricBench::Print(
-          "EFA Proxy Write Benchmark", nranks, opts.warmup, opts.repeat, total_bw, "GPU kernel -> Queue -> RDMA write, rank0 -> rank_k", {"ProxyDMA"},
-          results
+          "EFA Proxy Write Benchmark", nranks, opts.warmup, opts.repeat, total_bw, "GPU kernel -> Queue -> RDMA write, rank0 -> rank_k",
+          {"ProxySingle", "ProxyMulti"}, results
       );
     }
     return 0;
