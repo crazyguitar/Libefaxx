@@ -16,10 +16,9 @@
 __device__ __forceinline__ void DeviceWrite(DeviceContext ctx, int target, size_t len, int* data, uint64_t imm) {
   int idx = threadIdx.x + blockIdx.x * blockDim.x;
   if (idx < len) data[idx] = target + idx;
-  __syncthreads();
+  __threadfence_system();
 
   if (threadIdx.x == 0 && blockIdx.x == 0) {
-    __threadfence_system();
     DeviceRequest req{
         .type = static_cast<uint64_t>(DeviceRequestType::kPut),
         .rank = static_cast<uint64_t>(target),
@@ -32,7 +31,6 @@ __device__ __forceinline__ void DeviceWrite(DeviceContext ctx, int target, size_
     Fence();
     Quiet(ctx.posted, ctx.completed);
   }
-  __syncthreads();
 }
 
 /** @brief Device function: rank 1..n waits for data from rank 0 */
@@ -40,7 +38,6 @@ __device__ __forceinline__ void DeviceWait(DeviceContext ctx) {
   if (threadIdx.x == 0 && blockIdx.x == 0) {
     Quiet(ctx.posted, ctx.completed);
   }
-  __syncthreads();
 }
 
 /** @brief Device function: verify received data */
