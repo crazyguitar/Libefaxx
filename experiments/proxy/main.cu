@@ -105,6 +105,7 @@ struct ProxyWrite {
         }
         co_await YieldAwaiter{};
       }
+      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
     }());
 
     CUDA_CHECK(cudaStreamSynchronize(peer.stream));
@@ -143,10 +144,11 @@ struct ProxyRead {
         co_await read[0]->WaitallImmdata(1);
         read[0]->Complete();
       }
+      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
     }());
 
     CUDA_CHECK(cudaStreamSynchronize(peer.stream));
-    if (*result != 1) SPDLOG_ERROR("Verification failed on rank {}", peer.mpi.GetWorldRank());
+    if (*result != 1) throw std::runtime_error(fmt::format("Verification failed on rank {}", peer.mpi.GetWorldRank()));
     CUDA_CHECK(cudaFree(result));
   }
 };
@@ -170,8 +172,6 @@ struct ProxyBench {
     ProxyWrite<Peer>{iters}.template operator()<T>(peer, write);
     ProxyRead<Peer>{iters}.template operator()<T>(peer, read);
     auto end = std::chrono::high_resolution_clock::now();
-
-    for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
 
     double time_us = std::chrono::duration<double, std::micro>(end - start).count();
     double bw_gbps = (rank == 0) ? (static_cast<double>(size) * iters * (world_size - 1) * 8.0) / (time_us * 1000.0) : 0;
