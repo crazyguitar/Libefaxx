@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include <cuda.h>
 #include <cuda_runtime.h>
 #include <hwloc.h>
 #include <io/common.h>
@@ -107,11 +108,11 @@ struct CUDAMemorySupport {
     support.cc_minor = prop.minor;
 
     int dmabuf_attr = 0, gdr_attr = 0;
-    // Use raw attribute values for compatibility with older CUDA versions
-    // 123 = cudaDevAttrDmaBufSupported (CUDA 11.7+)
-    // 124 = cudaDevAttrGPUDirectRDMASupported
-    cudaDeviceGetAttribute(&dmabuf_attr, static_cast<cudaDeviceAttr>(123), device);
-    cudaDeviceGetAttribute(&gdr_attr, static_cast<cudaDeviceAttr>(124), device);
+    CUdevice cudev;
+    if (cuDeviceGet(&cudev, device) == CUDA_SUCCESS) {
+      cuDeviceGetAttribute(&dmabuf_attr, CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, cudev);
+      cuDeviceGetAttribute(&gdr_attr, CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_SUPPORTED, cudev);
+    }
     cudaGetLastError();  // Clear any errors from unsupported attributes
     support.dmabuf = (dmabuf_attr == 1);
     support.gdr = (support.cc_major < 10) && (gdr_attr == 1);  // Blackwell deprecates nv-p2p
