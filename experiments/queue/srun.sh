@@ -13,4 +13,4 @@ srun -N 1 \
   --container-mounts "${mount}" \
   --container-name cuda \
   --ntasks-per-node=1 \
-  "${binary}" -b 8 -e 1024 -r 65536 -w 8
+  "${binary}" -n 65536 -r 1 -w 1

@@ -123,7 +123,7 @@ following example experiments, which illustrate common usage patterns and benchm
 * [Send\/Recv](experiments/sendrecv): Benchmarks libfabric SEND/RECV operations over EFA.
 * [Write](experiments/write): Benchmarks libfabric WRITE operations over EFA.
 * [Alltoall](experiments/all2all): Benchmarks a simple all-to-all communication pattern over EFA.
-* [Queue](experiments/queue): Demonstrates a multi-producer, single-consumer (MPSC) queue between GPU and CPU.
+* [Queue](experiments/queue): Benchmarks a multi-producer, single-consumer (MPSC) queue between GPU and CPU.
 * [Proxy](experiments/proxy): Benchmarks GPU-initiated RDMA writes via a CPU proxy coroutine.
 
 ## Citation

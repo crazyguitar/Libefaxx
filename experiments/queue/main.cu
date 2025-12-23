@@ -1,12 +1,19 @@
+/**
+ * @file main.cu
+ * @brief MPSC Queue Benchmark - GPU producer, CPU consumer
+ */
 #include <affinity/affinity.h>
 #include <affinity/taskset.h>
-#include <bench/arguments.h>
 #include <cuda.h>
+#include <getopt.h>
+#include <io/awaiter.h>
+#include <io/runner.h>
+#include <rdma/fabric/request.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
-#include <bench/modules/gin.cuh>
 #include <chrono>
+#include <device/common.cuh>
 #include <queue/queue.cuh>
 #include <thread>
 #include <vector>
@@ -18,8 +25,6 @@
       exit(1);                                                                \
     }                                                                         \
   } while (0)
-
-#define LAUNCH_KERNEL(cfg, kernel, ...) CUDA_CHECK(cudaLaunchKernelEx(cfg, kernel, ##__VA_ARGS__))
 
 static constexpr int kThreads = 512;
 static constexpr int kBlocks = 16;
@@ -48,23 +53,17 @@ __host__ void Verify(const std::vector<int>& consumed, int size) {
 }
 
 struct Test {
-  Queue<int>* queue;
+  Queue<int> queue;
   cudaStream_t stream;
   cudaEvent_t start, stop;
 
-  __host__ Test() {
-    CUDA_CHECK(cudaMallocManaged(&queue, sizeof(Queue<int>)));
+  __host__ Test() : queue(kQueueSize) {
     CUDA_CHECK(cudaStreamCreate(&stream));
-    // call constructor explicitly
-    new (queue) Queue<int>(kQueueSize);
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
   }
 
   __host__ ~Test() {
-    // call destructor explicitly
-    queue->~Queue<int>();
-    CUDA_CHECK(cudaFree(queue));
     CUDA_CHECK(cudaStreamDestroy(stream));
     CUDA_CHECK(cudaEventDestroy(stop));
     CUDA_CHECK(cudaEventDestroy(start));
@@ -73,9 +72,9 @@ struct Test {
   __host__ void Launch() {
     std::vector<int> consumed;
     consumed.reserve(kQueueSize);
-    std::thread consumer(Consume, queue, std::ref(consumed), kQueueSize);
+    std::thread consumer(Consume, &queue, std::ref(consumed), kQueueSize);
     cudaLaunchConfig_t cfg{.gridDim = {kBlocks}, .blockDim = {kThreads}, .stream = stream};
-    LAUNCH_KERNEL(&cfg, Produce, queue, kQueueSize);
+    LAUNCH_KERNEL(&cfg, Produce, &queue, kQueueSize);
     CUDA_CHECK(cudaStreamSynchronize(stream));
     consumer.join();
     Verify(consumed, kQueueSize);
@@ -92,17 +91,120 @@ struct Test {
   }
 };
 
-struct Bench {
-  Queue<DeviceRequest> queue;
+struct Options {
+  int iters = 65536;  // items per run
+  int repeat = 1;     // benchmark repetitions
+  int warmup = 1;     // warmup runs
+};
+
+inline void usage(const char* prog) {
+  printf("Usage: %s [OPTIONS]\n", prog);
+  printf("  -n, --iters=N    Items per run (default: 65536)\n");
+  printf("  -r, --repeat=N   Benchmark repetitions (default: 1)\n");
+  printf("  -w, --warmup=N   Warmup runs (default: 1)\n");
+}
+
+inline Options parse_args(int argc, char* argv[]) {
+  Options opts;
+  static struct option long_opts[] = {
+      {"help", no_argument, nullptr, 'h'},
+      {"iters", required_argument, nullptr, 'n'},
+      {"repeat", required_argument, nullptr, 'r'},
+      {"warmup", required_argument, nullptr, 'w'},
+      {nullptr, 0, nullptr, 0}
+  };
+  int opt;
+  while ((opt = getopt_long(argc, argv, "hn:r:w:", long_opts, nullptr)) != -1) {
+    switch (opt) {
+      case 'h':
+        usage(argv[0]);
+        exit(0);
+      case 'n':
+        opts.iters = std::stoi(optarg);
+        break;
+      case 'r':
+        opts.repeat = std::stoi(optarg);
+        break;
+      case 'w':
+        opts.warmup = std::stoi(optarg);
+        break;
+      default:
+        usage(argv[0]);
+        exit(1);
+    }
+  }
+  return opts;
+}
+
+struct BenchResult {
+  size_t size;
+  double time_us;
+  double mops;
+};
+
+template <size_t N>
+struct alignas(8) Payload {
+  uint8_t data[N];
+};
+
+template <typename T>
+struct BenchContext {
+  Queue<T>* queue;
   uint64_t* posted;
   uint64_t* completed;
-  int* data;
+};
+
+/** @brief Push with Quiet per operation (blocking) */
+template <typename T>
+__device__ __forceinline__ void DevicePush(BenchContext<T> ctx) {
+  __threadfence_system();
+  if (threadIdx.x == 0) {
+    T payload{};
+    while (!ctx.queue->Push(payload)) __threadfence_system();
+    atomicAdd(reinterpret_cast<unsigned long long*>(ctx.posted), 1ULL);
+    Fence();
+    Quiet(ctx.posted, ctx.completed);
+  }
+  __syncthreads();
+}
+
+/** @brief Push without waiting (NBI - non-blocking interface) */
+template <typename T>
+__device__ __forceinline__ void DevicePushNBI(BenchContext<T> ctx) {
+  __threadfence_system();
+  if (threadIdx.x == 0) {
+    T payload{};
+    while (!ctx.queue->Push(payload)) __threadfence_system();
+    atomicAdd(reinterpret_cast<unsigned long long*>(ctx.posted), 1ULL);
+    Fence();
+  }
+  __syncthreads();
+}
+
+/** @brief Blocking kernel - Quiet per push */
+template <typename T>
+__global__ void PushKernel(BenchContext<T> ctx, int iters) {
+  for (int i = 0; i < iters; ++i) DevicePush(ctx);
+}
+
+/** @brief NBI kernel - pipelined pushes, single Quiet at end */
+template <typename T>
+__global__ void PushNBIKernel(BenchContext<T> ctx, int iters) {
+  for (int i = 0; i < iters; ++i) DevicePushNBI(ctx);
+  if (threadIdx.x == 0) Quiet(ctx.posted, ctx.completed);
+  __syncthreads();
+}
+
+template <typename T>
+struct Bench {
+  Queue<T> queue;
+  uint64_t* posted;
+  uint64_t* completed;
   cudaStream_t stream;
 
-  Bench(size_t size) {
+  Bench() {
     CUDA_CHECK(cudaMallocManaged(&posted, sizeof(uint64_t)));
     CUDA_CHECK(cudaMallocManaged(&completed, sizeof(uint64_t)));
-    CUDA_CHECK(cudaMalloc(&data, size));
     CUDA_CHECK(cudaStreamCreate(&stream));
     *posted = 0;
     *completed = 0;
@@ -111,48 +213,96 @@ struct Bench {
   ~Bench() {
     CUDA_CHECK(cudaFree(posted));
     CUDA_CHECK(cudaFree(completed));
-    CUDA_CHECK(cudaFree(data));
     CUDA_CHECK(cudaStreamDestroy(stream));
   }
 
-  DeviceContext GetContext() { return {&queue, posted, completed}; }
+  BenchContext<T> GetContext() { return {&queue, posted, completed}; }
 
   void Complete() { reinterpret_cast<cuda::std::atomic<uint64_t>*>(completed)->fetch_add(1, cuda::std::memory_order_relaxed); }
 
-  BenchResult Run(size_t size, int iters) {
+  template <typename Kernel>
+  BenchResult Run(Kernel kernel, int iters) {
     *posted = 0;
     *completed = 0;
     auto ctx = GetContext();
-    size_t len = size / sizeof(int);
 
     cudaLaunchConfig_t cfg{.gridDim = {1}, .blockDim = {256}, .stream = stream};
     auto start = std::chrono::high_resolution_clock::now();
-    LAUNCH_KERNEL(&cfg, ProxyWriteKernel, ctx, 0, len, data, 0ULL, iters);
+    LAUNCH_KERNEL(&cfg, kernel, ctx, iters);
 
-    for (int done = 0; done < iters;) {
-      DeviceRequest req;
-      if (queue.Pop(req)) {
-        Complete();
-        ++done;
+    ::Run([&]() -> Coro<> {
+      for (int done = 0; done < iters;) {
+        T item;
+        if (queue.Pop(item)) {
+          Complete();
+          ++done;
+          if (done == 1 || done % 64 == 0) {
+            auto now = std::chrono::high_resolution_clock::now();
+            double elapsed = std::chrono::duration<double>(now - start).count();
+            double lat = std::chrono::duration<double, std::micro>(now - start).count() / done;
+            printf("\r[%.3fs] ops=%d/%d size=%zu lat=%.3fus\033[K", elapsed, done, iters, sizeof(T), lat);
+            fflush(stdout);
+          }
+        }
+        co_await YieldAwaiter{};
       }
-    }
+    }());
+    printf("\r\033[K");
     CUDA_CHECK(cudaStreamSynchronize(stream));
     auto end = std::chrono::high_resolution_clock::now();
 
     double time_us = std::chrono::duration<double, std::micro>(end - start).count();
     double lat_us = time_us / iters;
-    double throughput_mops = static_cast<double>(iters) / time_us;
-    return {size, lat_us, throughput_mops, 0.0};
+    double mops = static_cast<double>(iters) / time_us;
+    return {sizeof(T), lat_us, mops};
   }
 };
 
-void PrintSummary(const char* title, int warmup, int iters, const std::vector<BenchResult>& results) {
+struct BenchResultPair {
+  size_t size;
+  BenchResult blocking;
+  BenchResult nbi;
+};
+
+template <typename T>
+BenchResultPair RunBench(const Options& opts) {
+  Bench<T> bench;
+  // Warmup
+  for (int i = 0; i < opts.warmup; ++i) bench.Run(PushKernel<T>, opts.iters);
+
+  // Blocking benchmark
+  BenchResult blocking{sizeof(T), 0, 0};
+  for (int i = 0; i < opts.repeat; ++i) {
+    auto r = bench.Run(PushKernel<T>, opts.iters);
+    blocking.time_us += r.time_us;
+    blocking.mops += r.mops;
+  }
+  blocking.time_us /= opts.repeat;
+  blocking.mops /= opts.repeat;
+
+  // NBI benchmark
+  BenchResult nbi{sizeof(T), 0, 0};
+  for (int i = 0; i < opts.repeat; ++i) {
+    auto r = bench.Run(PushNBIKernel<T>, opts.iters);
+    nbi.time_us += r.time_us;
+    nbi.mops += r.mops;
+  }
+  nbi.time_us /= opts.repeat;
+  nbi.mops /= opts.repeat;
+
+  return {sizeof(T), blocking, nbi};
+}
+
+void PrintSummary(const char* title, const Options& opts, const std::vector<BenchResultPair>& results) {
   printf("#\n# %s\n#\n", title);
-  printf("# warmup iters: %d\n", warmup);
-  printf("# bench iters: %d\n#\n", iters);
-  printf("# Pattern: GPU -> Queue -> CPU (no RDMA)\n#\n");
-  printf("%12s %14s %10s\n", "size", "Mops/s", "Lat(us)");
-  for (const auto& r : results) printf("%12zu %14.2f %10.2f\n", r.size, r.bw_gbps, r.time_us);
+  printf("# iters per run: %d\n", opts.iters);
+  printf("# repeat: %d\n", opts.repeat);
+  printf("# warmup: %d\n#\n", opts.warmup);
+  printf("# Pattern: GPU -> Queue -> CPU\n#\n");
+  printf("%12s %14s %10s %14s %10s\n", "size", "Blocking", "Lat(us)", "NBI", "Lat(us)");
+  for (const auto& r : results) {
+    printf("%12zu %14.2f %10.2f %14.2f %10.2f\n", r.size, r.blocking.mops, r.blocking.time_us, r.nbi.mops, r.nbi.time_us);
+  }
   printf("#\n# Benchmark complete.\n");
 }
 
@@ -166,36 +316,23 @@ int main(int argc, char* argv[]) {
   Taskset::Set(aff.cores[device]->logical_index);
   CUDA_CHECK(cudaSetDevice(device));
 
-  // Original test
+  printf("Running Test...\n");
+  fflush(stdout);
   Test test;
   test.Run(opts.warmup);
 
-  // Proxy-style benchmark (no RDMA)
-  Bench bench(opts.maxbytes);
-  for (int i = 0; i < opts.warmup; ++i) bench.Run(opts.minbytes, opts.repeat);
+  printf("Running Bench...\n");
+  fflush(stdout);
 
-  std::vector<BenchResult> results;
-  for (auto size : generate_sizes(opts)) {
-    BenchResult sum{size, 0, 0, 0};
-    auto start = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < opts.repeat; ++i) {
-      auto r = bench.Run(size, 1);
-      sum.time_us += r.time_us;
-      sum.bw_gbps += r.bw_gbps;
-      if (i % 64 == 0) {
-        auto now = std::chrono::high_resolution_clock::now();
-        double elapsed = std::chrono::duration<double>(now - start).count();
-        size_t cur_bytes = i * size, total_bytes = (size_t)opts.repeat * size;
-        double lat = sum.time_us / (i + 1);
-        printf("\r[%.3fs] ops=%d/%d bytes=%zu/%zu lat=%.3fus\033[K", elapsed, i, opts.repeat, cur_bytes, total_bytes, lat);
-        fflush(stdout);
-      }
-    }
-    sum.time_us /= opts.repeat;
-    sum.bw_gbps /= opts.repeat;
-    results.push_back(sum);
-    printf("\r\033[K");
-  }
+  std::vector<BenchResultPair> results;
+  results.push_back(RunBench<Payload<8>>(opts));
+  results.push_back(RunBench<Payload<16>>(opts));
+  results.push_back(RunBench<Payload<32>>(opts));
+  results.push_back(RunBench<Payload<64>>(opts));
+  results.push_back(RunBench<Payload<128>>(opts));
+  results.push_back(RunBench<Payload<256>>(opts));
+  results.push_back(RunBench<Payload<512>>(opts));
+  results.push_back(RunBench<Payload<1024>>(opts));
 
-  PrintSummary("MPSC Queue Benchmark", opts.warmup, opts.repeat, results);
+  PrintSummary("MPSC Queue Benchmark", opts, results);
 }
