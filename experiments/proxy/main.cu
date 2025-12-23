@@ -27,8 +27,9 @@ struct ProxyBench {
     auto end = std::chrono::high_resolution_clock::now();
 
     double time_us = std::chrono::duration<double, std::micro>(end - start).count();
+    double lat_us = time_us / iters;
     double bw_gbps = (rank == 0) ? (static_cast<double>(size) * iters * 8.0) / (time_us * 1000.0) : 0;
-    return {size, time_us / iters, bw_gbps, 0.0};
+    return {size, lat_us, bw_gbps, 0.0};
   }
 };
 
@@ -54,7 +55,8 @@ struct Test {
     int npairs = world - 1;
     double avg_bw = sum_bw / npairs;
     double link_bw = MultiChannel ? total_bw : single_bw;
-    return {size, sum_time / npairs, avg_bw, (link_bw > 0) ? (avg_bw / link_bw) * 100.0 : 0};
+    double avg_lat = sum_time / npairs;
+    return {size, avg_lat, avg_bw, (link_bw > 0) ? (avg_bw / link_bw) * 100.0 : 0};
   }
 };
 

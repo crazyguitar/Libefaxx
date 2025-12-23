@@ -16,7 +16,7 @@
  */
 struct BenchResult {
   size_t size;     ///< Buffer size in bytes
-  double time_us;  ///< Average time per iteration in microseconds
+  double time_us;  ///< Average time per iteration in microseconds (latency)
   double bw_gbps;  ///< Achieved bandwidth in Gbps
   double bus_bw;   ///< Bus bandwidth utilization ratio
 };
@@ -269,8 +269,8 @@ class FabricBench : public Peer {
       func(*this, a, b);
       if (rank == 0 && i % Progress::kPrintFreq == 0) progress.Print(std::chrono::high_resolution_clock::now(), buf_size, i + 1);
     }
-    MPI_Barrier(MPI_COMM_WORLD);
     auto end = std::chrono::high_resolution_clock::now();
+    MPI_Barrier(MPI_COMM_WORLD);
     double elapsed_us = std::chrono::duration<double, std::micro>(end - start).count();
     double avg_us = elapsed_us / iters;
     double bw_gbps = (buf_size * 8.0) / (avg_us * 1000.0);
@@ -310,11 +310,11 @@ class FabricBench : public Peer {
     if (pattern) printf("# Pattern: %s\n#\n", pattern);
     printf("# BusBW: Percentage of theoretical link bandwidth achieved\n#\n");
     printf("%12s %12s", "size", "count");
-    for (const auto& col : columns) printf(" %14s %10s", col.c_str(), "BusBW(%)");
+    for (const auto& col : columns) printf(" %14s %10s %10s", col.c_str(), "BusBW(%)", "Lat(us)");
     printf("\n");
     for (const auto& r : results) {
       printf("%12zu %12zu", r[0].size, r[0].size / sizeof(float));
-      for (const auto& v : r) printf(" %14.2f %10.1f", v.bw_gbps, v.bus_bw);
+      for (const auto& v : r) printf(" %14.2f %10.1f %10.2f", v.bw_gbps, v.bus_bw, v.time_us);
       printf("\n");
     }
     printf("#\n# Benchmark complete.\n");

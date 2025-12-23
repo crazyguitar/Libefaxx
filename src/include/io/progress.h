@@ -55,7 +55,7 @@ class Progress : private NoCopy {
    * @param total_ops Expected total operations
    * @param total_bw Expected total bandwidth in bytes/sec
    *
-   * Output format: [time] ops=current/total bytes=current/total bw=X.XXXGbps(XX.X%)
+   * Output format: [time] ops=current/total bytes=current/total bw=X.XXXGbps(XX.X%) lat=X.XXXus
    */
   inline static void PrintProgress(
     timepoint start,
@@ -71,7 +71,8 @@ class Progress : private NoCopy {
     auto bw_gbps = bytes * Gb / elapse;
     auto total_bw_gbs = total_bw * 1e-9;
     auto percent = 100.0 * bw_gbps / (total_bw_gbs);
-    std::cout << fmt::format("\r[{:.3f}s] ops={}/{} bytes={}/{} bw={:.3f}Gbps({:.1f}%)\033[K", elapse, ops, total_ops, bytes, total_bytes, bw_gbps, percent) << std::flush;
+    auto lat_us = (elapse * 1e6) / ops;
+    std::cout << fmt::format("\r[{:.3f}s] ops={}/{} bytes={}/{} bw={:.3f}Gbps({:.1f}%) lat={:.3f}us\033[K", elapse, ops, total_ops, bytes, total_bytes, bw_gbps, percent, lat_us) << std::flush;
   }
   // clang-format on
 
