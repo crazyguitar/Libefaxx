@@ -119,11 +119,11 @@ following example experiments, which illustrate common usage patterns and benchm
 * [Affinity](experiments/affinity): Demonstrates how to query and enumerate GPU device information.
 * [EFA](experiments/efa): Shows how to discover and inspect available EFA devices.
 * [Echo](experiments/echo): Implements a simple TCP echo server/client to illustrate usage of the coroutine-based scheduler.
-* [Queue](experiments/queue): Demonstrates a multi-producer, single-consumer (MPSC) queue between GPU and CPU.
 * [Bootstrap](experiments/bootstrap): Illustrates exchanging RDMA details via MPI communication.
 * [Send\/Recv](experiments/sendrecv): Benchmarks libfabric SEND/RECV operations over EFA.
 * [Write](experiments/write): Benchmarks libfabric WRITE operations over EFA.
 * [Alltoall](experiments/all2all): Benchmarks a simple all-to-all communication pattern over EFA.
+* [Queue](experiments/queue): Demonstrates a multi-producer, single-consumer (MPSC) queue between GPU and CPU.
 * [Proxy](experiments/proxy): Benchmarks GPU-initiated RDMA writes via a CPU proxy coroutine.
 
 ## Citation

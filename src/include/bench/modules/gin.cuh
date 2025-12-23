@@ -10,21 +10,41 @@
 
 #include <bench/mpi/fabric.cuh>
 
-/** @brief Write data and push RDMA request to queue */
+/** @brief Write data and push RDMA request to queue (with Quiet per write) */
 __device__ __forceinline__ void DeviceWrite(DeviceContext ctx, int target, size_t len, int* __restrict__ data, uint64_t imm) {
   for (size_t idx = threadIdx.x; idx < len; idx += blockDim.x) data[idx] = target + static_cast<int>(idx);
   __threadfence_system();
   if (threadIdx.x == 0) {
-    ctx.queue->Push(
-        {.type = static_cast<uint64_t>(DeviceRequestType::kPut),
-         .rank = static_cast<uint64_t>(target),
-         .size = len * sizeof(int),
-         .addr = reinterpret_cast<uint64_t>(data),
-         .imm = imm}
-    );
+    DeviceRequest req{
+        .type = static_cast<uint64_t>(DeviceRequestType::kPut),
+        .rank = static_cast<uint64_t>(target),
+        .size = len * sizeof(int),
+        .addr = reinterpret_cast<uint64_t>(data),
+        .imm = imm
+    };
+    while (!ctx.queue->Push(req)) __threadfence_system();
     atomicAdd(reinterpret_cast<unsigned long long*>(ctx.posted), 1ULL);
     Fence();
     Quiet(ctx.posted, ctx.completed);
+  }
+  __syncthreads();
+}
+
+/** @brief NBI (non-blocking interface) write - push without waiting, busy-wait on queue full */
+__device__ __forceinline__ void DeviceWriteNBI(DeviceContext ctx, int target, size_t len, int* __restrict__ data, uint64_t imm) {
+  for (size_t idx = threadIdx.x; idx < len; idx += blockDim.x) data[idx] = target + static_cast<int>(idx);
+  __threadfence_system();
+  if (threadIdx.x == 0) {
+    DeviceRequest req{
+        .type = static_cast<uint64_t>(DeviceRequestType::kPut),
+        .rank = static_cast<uint64_t>(target),
+        .size = len * sizeof(int),
+        .addr = reinterpret_cast<uint64_t>(data),
+        .imm = imm
+    };
+    while (!ctx.queue->Push(req)) __threadfence_system();
+    atomicAdd(reinterpret_cast<unsigned long long*>(ctx.posted), 1ULL);
+    Fence();
   }
   __syncthreads();
 }
@@ -45,8 +65,45 @@ __device__ __forceinline__ bool DeviceVerify(int expected, size_t len, const int
   return true;
 }
 
+/**
+ * @brief Blocking kernel - wait for each completion
+ *
+ *   GPU          CPU Proxy         Network
+ *    |              |                 |
+ *    |---Push[0]--->|                 |
+ *    |              |----RDMA[0]----->|
+ *    |<--Complete---|                 |
+ *    |   (Quiet)    |                 |
+ *    |              |                 |
+ *    |---Push[1]--->|                 |   <- bubble: GPU idle
+ *    |              |----RDMA[1]----->|
+ *    |<--Complete---|                 |
+ *    |   (Quiet)    |                 |
+ *    v              v                 v
+ */
 __global__ void ProxyWriteKernel(DeviceContext ctx, int target, size_t len, int* __restrict__ data, uint64_t imm, int iters) {
   for (int i = 0; i < iters; ++i) DeviceWrite(ctx, target, len, data, imm);
+}
+
+/**
+ * @brief NBI (Non-Blocking Interface) kernel - pipelined writes with single Quiet at end
+ *
+ *   GPU          CPU Proxy         Network
+ *    |              |                 |
+ *    |---Push[0]--->|                 |
+ *    |---Push[1]--->|----RDMA[0]----->|
+ *    |---Push[2]--->|----RDMA[1]----->|
+ *    |      ...     |----RDMA[2]----->|
+ *    |   (Quiet)    |      ...        |
+ *    |<--Complete---|                 |
+ *    v              v                 v
+ *
+ * NBI eliminates per-operation wait bubbles by overlapping push and RDMA.
+ */
+__global__ void ProxyWriteNBIKernel(DeviceContext ctx, int target, size_t len, int* __restrict__ data, uint64_t imm, int iters) {
+  for (int i = 0; i < iters; ++i) DeviceWriteNBI(ctx, target, len, data, imm);
+  if (threadIdx.x == 0) Quiet(ctx.posted, ctx.completed);
+  __syncthreads();
 }
 
 __global__ void ProxyWaitKernel(DeviceContext ctx, int rank, size_t len, int* __restrict__ data, int iters, int* __restrict__ result) {
@@ -54,10 +111,23 @@ __global__ void ProxyWaitKernel(DeviceContext ctx, int rank, size_t len, int* __
   if (threadIdx.x == 0) *result = DeviceVerify(rank, len, data) ? 1 : 0;
 }
 
+/** @brief Kernel launcher tags */
+struct KernelBlocking {
+  static void Launch(cudaLaunchConfig_t& cfg, DeviceContext ctx, int target, size_t len, int* data, uint64_t imm, int iters) {
+    LAUNCH_KERNEL(&cfg, ProxyWriteKernel, ctx, target, len, data, imm, iters);
+  }
+};
+struct KernelNBI {
+  static void Launch(cudaLaunchConfig_t& cfg, DeviceContext ctx, int target, size_t len, int* data, uint64_t imm, int iters) {
+    LAUNCH_KERNEL(&cfg, ProxyWriteNBIKernel, ctx, target, len, data, imm, iters);
+  }
+};
+
 /**
  * @brief Proxy write: GPU kernel pushes requests, CPU proxy executes RDMA
+ * @tparam Launcher KernelBlocking (Quiet per write) or KernelNBI (Quiet at end)
  */
-template <typename Peer, bool MultiChannel>
+template <typename Peer, bool MultiChannel, typename Launcher = KernelBlocking>
 struct ProxyWrite {
   int iters, target;
 
@@ -78,7 +148,7 @@ struct ProxyWrite {
     size_t size = write[target]->Size(), len = size / sizeof(int);
 
     cudaLaunchConfig_t cfg{.gridDim = {1, 1, 1}, .blockDim = {256, 1, 1}, .stream = peer.stream};
-    LAUNCH_KERNEL(&cfg, ProxyWriteKernel, ctx, target, len, data, 1ULL, iters);
+    Launcher::Launch(cfg, ctx, target, len, data, 1ULL, iters);
 
     Progress progress(iters, MultiChannel ? peer.GetTotalBandwidth() : peer.GetBandwidth(0));
     for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);

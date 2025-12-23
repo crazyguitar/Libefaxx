@@ -8,10 +8,7 @@
 #include <bench/modules/gin.cuh>
 #include <bench/mpi/fabric.cuh>
 
-/**
- * @brief Combined proxy benchmark for a single target pair
- */
-template <typename Peer, bool MultiChannel>
+template <typename Peer, bool MultiChannel, template <typename, bool, typename> class Writer = ProxyWrite, typename Launcher = KernelBlocking>
 struct ProxyBench {
   int iters, target;
 
@@ -22,7 +19,7 @@ struct ProxyBench {
     if (rank != 0 && rank != target) return {size, 0, 0, 0};
 
     auto start = std::chrono::high_resolution_clock::now();
-    ProxyWrite<Peer, MultiChannel>{iters, target}(peer, write);
+    Writer<Peer, MultiChannel, Launcher>{iters, target}(peer, write);
     ProxyRead<Peer, MultiChannel>{iters}(peer, read);
     auto end = std::chrono::high_resolution_clock::now();
 
@@ -33,7 +30,7 @@ struct ProxyBench {
   }
 };
 
-template <typename BufType, bool MultiChannel>
+template <typename BufType, bool MultiChannel, typename Launcher = KernelBlocking>
 struct Test {
   static BenchResult Run(size_t size, const Options& opts, double single_bw, double total_bw) {
     FabricBench peer;
@@ -46,7 +43,7 @@ struct Test {
     double sum_bw = 0, sum_time = 0;
     int world = peer.mpi.GetWorldSize();
     for (int t = 1; t < world; ++t) {
-      auto r = ProxyBench<FabricBench, MultiChannel>{opts.repeat, t}.Run(peer, write, read);
+      auto r = ProxyBench<FabricBench, MultiChannel, ProxyWrite, Launcher>{opts.repeat, t}.Run(peer, write, read);
       sum_bw += r.bw_gbps;
       sum_time += r.time_us;
     }
@@ -70,6 +67,8 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
 
 using ProxySingle = Test<SymmetricDMAMemory, false>;
 using ProxyMulti = Test<SymmetricDMAMemory, true>;
+using ProxySingleNBI = Test<SymmetricDMAMemory, false, KernelNBI>;
+using ProxyMultiNBI = Test<SymmetricDMAMemory, true, KernelNBI>;
 
 int main(int argc, char* argv[]) {
   try {
@@ -82,13 +81,13 @@ int main(int argc, char* argv[]) {
     double single_bw = peer.GetBandwidth(0) / 1e9;
     double total_bw = peer.GetTotalBandwidth() / 1e9;
 
-    std::vector<std::array<BenchResult, 2>> results;
-    for (auto size : sizes) results.push_back(RunTests<ProxySingle, ProxyMulti>(size, opts, single_bw, total_bw));
+    std::vector<std::array<BenchResult, 4>> results;
+    for (auto size : sizes) results.push_back(RunTests<ProxySingle, ProxyMulti, ProxySingleNBI, ProxyMultiNBI>(size, opts, single_bw, total_bw));
 
     if (rank == 0) {
       FabricBench::Print(
           "EFA Proxy Write Benchmark", nranks, opts.warmup, opts.repeat, total_bw, "GPU kernel -> Queue -> RDMA write, rank0 -> rank_k",
-          {"ProxySingle", "ProxyMulti"}, results
+          {"ProxySingle", "ProxyMulti", "ProxySingleNBI", "ProxyMultiNBI"}, results
       );
     }
     return 0;
