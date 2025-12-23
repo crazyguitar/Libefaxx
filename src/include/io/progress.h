@@ -22,9 +22,9 @@ class Progress : private NoCopy {
   using timepoint = std::chrono::high_resolution_clock::time_point;
 
   /** @brief Conversion factor: bytes to gigabits */
-  inline constexpr static double Gb = 8.0f / 1e9;
+  constexpr static double Gb = 8.0f / 1e9;
   /** @brief Print frequency to reduce overhead */
-  inline constexpr static int kPrintFreq = 64;
+  constexpr static int kPrintFreq = 64;
 
   Progress() = default;
   /**
@@ -42,7 +42,7 @@ class Progress : private NoCopy {
    * @param size Size per operation in bytes
    * @param ops Number of operations completed
    */
-  inline void Print(timepoint now, size_t size, uint64_t ops) { PrintProgress(start_, now, size, ops, total_ops_, total_bw_); }
+  void Print(timepoint now, size_t size, uint64_t ops) { PrintProgress(start_, now, size, ops, total_ops_, total_bw_); }
 
  private:
   // clang-format off
@@ -57,7 +57,7 @@ class Progress : private NoCopy {
    *
    * Output format: [time] ops=current/total bytes=current/total bw=X.XXXGbps(XX.X%) lat=X.XXXus
    */
-  inline static void PrintProgress(
+  static void PrintProgress(
     timepoint start,
     timepoint end,
     size_t size,

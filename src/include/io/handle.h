@@ -27,29 +27,29 @@ struct Handle {
    * @brief Set handle execution state
    * @param state New state to set
    */
-  inline void SetState(State state) { state_ = state; }
+  void SetState(State state) noexcept { state_ = state; }
 
   /**
    * @brief Get current execution state
    * @return Current state
    */
-  [[nodiscard]] inline State GetState() const noexcept { return state_; }
+  [[nodiscard]] State GetState() const noexcept { return state_; }
 
   /**
    * @brief Get unique handle identifier
    * @return Handle ID
    */
-  [[nodiscard]] inline uint64_t GetId() const noexcept { return id_; }
+  [[nodiscard]] uint64_t GetId() const noexcept { return id_; }
 
   /**
    * @brief Schedule handle for execution
    */
-  void schedule();
+  void schedule() noexcept;
 
   /**
    * @brief Cancel handle execution
    */
-  void cancel();
+  void cancel() noexcept;
 
  private:
   static inline std::atomic<uint64_t> seq_{0};

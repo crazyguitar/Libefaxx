@@ -79,7 +79,7 @@ class EFAInfo : private NoCopy {
   }
 
  private:
-  inline static struct fi_info* New() {
+  static struct fi_info* New() {
     int rc = 0;
     struct fi_info* hints = nullptr;
     struct fi_info* info = nullptr;
@@ -248,7 +248,7 @@ class EFA : private NoCopy {
    * @param addr Binary address buffer
    * @return Hex string representation
    */
-  inline static std::string Addr2Str(const char* addr) {
+  static std::string Addr2Str(const char* addr) {
     std::string out;
     for (size_t i = 0; i < kAddrSize; ++i) out += fmt::format("{:02x}", addr[i]);
     return out;
@@ -259,7 +259,7 @@ class EFA : private NoCopy {
    * @param addr Hex string address
    * @param bytes Output binary buffer
    */
-  inline static void Str2Addr(const std::string& addr, char* bytes) {
+  static void Str2Addr(const std::string& addr, char* bytes) noexcept {
     for (size_t i = 0; i < kAddrSize; ++i) sscanf(addr.c_str() + 2 * i, "%02hhx", &bytes[i]);
   }
 

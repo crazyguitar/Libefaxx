@@ -129,7 +129,7 @@ class FabricSelector : public detail::Selector {
    * @param ret Output event vector
    * @param imm Immediate data context map
    */
-  inline static void HandleImmdata(struct fi_cq_data_entry& entry, std::vector<Event>& ret, ImmContextMap& imm) {
+  static void HandleImmdata(struct fi_cq_data_entry& entry, std::vector<Event>& ret, ImmContextMap& imm) {
     uint64_t imm_data = entry.data;
     if (!imm_data) [[unlikely]]
       return;
@@ -152,7 +152,7 @@ class FabricSelector : public detail::Selector {
    * @param ret Output event vector
    * @param imm Immediate data context map
    */
-  inline static void HandleCompletion(struct fi_cq_data_entry* cq_entries, size_t n, std::vector<Event>& ret, ImmContextMap& imm) {
+  static void HandleCompletion(struct fi_cq_data_entry* cq_entries, size_t n, std::vector<Event>& ret, ImmContextMap& imm) {
     for (size_t i = 0; i < n; ++i) {
       auto& entry = cq_entries[i];
       auto flags = entry.flags;
@@ -173,7 +173,7 @@ class FabricSelector : public detail::Selector {
    * @param cq Completion queue with error
    * @throws std::runtime_error with error details
    */
-  inline static void HandleError(struct fid_cq* cq) {
+  static void HandleError(struct fid_cq* cq) {
     struct fi_cq_err_entry err_entry;
     auto rc = fi_cq_readerr(cq, &err_entry, 0);
     if (rc < 0) {
@@ -195,7 +195,7 @@ class FabricSelector : public detail::Selector {
    * @param rc Error code from libfabric
    * @throws std::runtime_error with error details
    */
-  inline static void FatalError(int rc) {
+  static void FatalError(int rc) {
     auto msg = fmt::format("fatal error. error({}): {}", rc, fi_strerror(-rc));
     throw std::runtime_error(msg);
   }

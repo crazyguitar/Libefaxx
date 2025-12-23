@@ -126,7 +126,7 @@ class Client : private NoCopy {
      *
      * Safe to call multiple times.
      */
-    inline void Close() {
+    void Close() noexcept {
       if (fd_ >= 0) {
         close(fd_);
         fd_ = -1;
@@ -173,7 +173,7 @@ class Client : private NoCopy {
      * @param blocking true for blocking, false for non-blocking
      * @return true on success
      */
-    inline static bool SetBlocking(int fd, bool blocking) {
+    static bool SetBlocking(int fd, bool blocking) noexcept {
       int flags = fcntl(fd, F_GETFL, 0);
       if (flags < 0) {
         SPDLOG_WARN("fcntl({}, F_GETFL) fail. error: {}", fd, strerror(errno));

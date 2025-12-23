@@ -39,7 +39,7 @@ class Channel : private NoCopy {
     constexpr bool await_ready() const noexcept { return false; }
 
     /** @brief Return bytes sent or error code on resume */
-    inline ssize_t await_resume() noexcept {
+    ssize_t await_resume() noexcept {
       if (rc != 0) [[unlikely]]
         return rc;
       return context.entry.len;
@@ -50,7 +50,7 @@ class Channel : private NoCopy {
      * @return true if suspended, false if immediate error
      */
     template <typename Promise>
-    inline bool await_suspend(std::coroutine_handle<Promise> coroutine) noexcept {
+    bool await_suspend(std::coroutine_handle<Promise> coroutine) noexcept {
       coroutine.promise().SetState(Handle::kSuspend);
       context.handle = &coroutine.promise();
       struct iovec iov{data, size};
@@ -77,7 +77,7 @@ class Channel : private NoCopy {
     constexpr bool await_ready() const noexcept { return false; }
 
     /** @brief Return bytes received or error code on resume */
-    inline ssize_t await_resume() noexcept {
+    ssize_t await_resume() noexcept {
       if (rc != 0) [[unlikely]]
         return rc;
       return context.entry.len;
@@ -88,7 +88,7 @@ class Channel : private NoCopy {
      * @return true if suspended, false if immediate error
      */
     template <typename Promise>
-    inline bool await_suspend(std::coroutine_handle<Promise> coroutine) noexcept {
+    bool await_suspend(std::coroutine_handle<Promise> coroutine) noexcept {
       coroutine.promise().SetState(Handle::kSuspend);
       context.handle = &coroutine.promise();
       struct iovec iov{data, size};
@@ -120,7 +120,7 @@ class Channel : private NoCopy {
     constexpr bool await_ready() const noexcept { return false; }
 
     /** @brief Return bytes written or error code on resume */
-    inline ssize_t await_resume() noexcept {
+    ssize_t await_resume() noexcept {
       if (rc != 0) [[unlikely]]
         return rc;
       return context.entry.len;

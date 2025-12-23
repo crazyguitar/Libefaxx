@@ -55,7 +55,7 @@ class Server : private NoCopy {
      * @param port Port number to listen on
      * @throws std::runtime_error if socket creation, bind, or listen fails
      */
-    inline void Open(const std::string& addr, int port) {
+    void Open(const std::string& addr, int port) {
       struct addrinfo hints{.ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM};
       auto service = std::to_string(port);
       int gai_err = getaddrinfo(addr.data(), service.c_str(), &hints, &addrinfo_);
@@ -91,7 +91,7 @@ class Server : private NoCopy {
      *
      * Safe to call multiple times.
      */
-    inline void Close() {
+    void Close() noexcept {
       if (fd_ >= 0) {
         close(fd_);
         fd_ = -1;
@@ -106,7 +106,7 @@ class Server : private NoCopy {
      * @brief Check if the socket is open and listening
      * @return true if the socket file descriptor is valid
      */
-    inline bool IsOpen() const noexcept { return fd_ >= 0; }
+    [[nodiscard]] bool IsOpen() const noexcept { return fd_ >= 0; }
 
    private:
     /**
@@ -115,7 +115,7 @@ class Server : private NoCopy {
      * @param p Address info to bind to
      * @return true on success
      */
-    inline static bool Bind(int fd, struct addrinfo* p) {
+    static bool Bind(int fd, struct addrinfo* p) noexcept {
       if (!SetSocket(fd)) return false;
       if (bind(fd, p->ai_addr, p->ai_addrlen) < 0) {
         SPDLOG_WARN("bind({}) fail. error: {}", fd, strerror(errno));
@@ -129,14 +129,14 @@ class Server : private NoCopy {
      * @param fd Socket file descriptor
      * @return true on success
      */
-    inline static bool SetSocket(int fd) { return SetBlocking(fd, false) and SetSockopt(fd); }
+    static bool SetSocket(int fd) noexcept { return SetBlocking(fd, false) and SetSockopt(fd); }
 
     /**
      * @brief Set SO_REUSEADDR socket option
      * @param fd Socket file descriptor
      * @return true on success
      */
-    inline static bool SetSockopt(int fd) {
+    static bool SetSockopt(int fd) noexcept {
       int on = 1;
       if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) {
         SPDLOG_WARN("setsockopt({}, SO_REUSEADDR) fail. error: {}", fd, strerror(errno));
@@ -151,7 +151,7 @@ class Server : private NoCopy {
      * @param blocking true for blocking, false for non-blocking
      * @return true on success
      */
-    inline static bool SetBlocking(int fd, bool blocking) {
+    static bool SetBlocking(int fd, bool blocking) noexcept {
       int flags = fcntl(fd, F_GETFL, 0);
       if (flags < 0) {
         SPDLOG_WARN("fcntl({}, F_GETFL) fail. error: {}", fd, strerror(errno));
@@ -232,7 +232,7 @@ class Server : private NoCopy {
    * @brief Handle new client connection
    * @param client_fd Client socket file descriptor
    */
-  inline void HandleClient(int client_fd) {
+  void HandleClient(int client_fd) {
     if (!Socket::SetBlocking(client_fd, false)) {
       SPDLOG_WARN("Failed to set client socket {} to non-blocking, closing", client_fd);
       close(client_fd);
@@ -246,7 +246,7 @@ class Server : private NoCopy {
    * @brief Unregister socket from epoll
    * @param fd Socket file descriptor
    */
-  inline void Quit(int fd) {
+  void Quit(int fd) {
     auto& io = IO::Get();
     Stream stream{fd};
     io.Quit<Selector>(stream);
@@ -259,7 +259,7 @@ class Server : private NoCopy {
    * @brief Remove completed connections from list
    * @param connected List of active connections
    */
-  inline void Clean(std::list<Future<Coro<>>>& connected) {
+  void Clean(std::list<Future<Coro<>>>& connected) {
     if (connected.size() < kConn) [[likely]]
       return;
     for (auto it = connected.begin(); it != connected.end();) {

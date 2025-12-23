@@ -1,13 +1,13 @@
 #include <io/handle.h>
 #include <io/io.h>
 
-void Handle::schedule() {
+void Handle::schedule() noexcept {
   if (state_ == Handle::kUnschedule) {
     IO::Get().Call(*this);
   }
 }
 
-void Handle::cancel() {
+void Handle::cancel() noexcept {
   if (state_ != Handle::kUnschedule) {
     IO::Get().Cancel(*this);
   }

@@ -23,7 +23,7 @@ class Future : private NoCopy {
   }
 
   /** @brief Cancel the underlying coroutine */
-  inline void Cancel() { coro_.Destroy(); }
+  void Cancel() { coro_.Destroy(); }
 
   /** @brief Make future awaitable (lvalue) */
   decltype(auto) operator co_await() const& noexcept { return coro_.operator co_await(); }
@@ -38,10 +38,10 @@ class Future : private NoCopy {
   decltype(auto) result() && { return std::move(coro_).result(); }
 
   /** @brief Check if coroutine is valid */
-  inline bool valid() const { return coro_.valid(); }
+  [[nodiscard]] bool valid() const noexcept { return coro_.valid(); }
 
   /** @brief Check if coroutine is done */
-  inline bool done() const { return coro_.done(); }
+  [[nodiscard]] bool done() const noexcept { return coro_.done(); }
 
  private:
   C coro_;

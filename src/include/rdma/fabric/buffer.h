@@ -38,7 +38,7 @@ class Buffer : private NoCopy {
 
     constexpr bool await_ready() const noexcept { return false; }
 
-    inline void await_resume() noexcept {
+    void await_resume() noexcept {
       // Cleanup: remove context from selector
       IO::Get().Quit<FabricSelector>(context);
     }
@@ -67,7 +67,7 @@ class Buffer : private NoCopy {
    * @brief Get pointer to buffer data
    * @return Pointer to aligned memory
    */
-  [[nodiscard]] inline void* Data() noexcept { return data_; }
+  [[nodiscard]] void* Data() noexcept { return data_; }
 
   /**
    * @brief Get pointer to RDMA-registered data (for use with MRs)
@@ -80,7 +80,7 @@ class Buffer : private NoCopy {
    * @brief Get buffer size
    * @return Size in bytes
    */
-  [[nodiscard]] inline size_t Size() const noexcept { return size_; }
+  [[nodiscard]] size_t Size() const noexcept { return size_; }
 
   /**
    * @brief Send data through specified channel
@@ -383,7 +383,7 @@ class HostBuffer : public Buffer {
    * @param size Buffer size in bytes
    * @return Memory region handle
    */
-  inline static struct fid_mr* Register(Channel& channel, void* __restrict__ data, size_t size) {
+  static struct fid_mr* Register(Channel& channel, void* __restrict__ data, size_t size) {
     struct fid_mr* mr;
     struct fi_mr_attr mr_attr = {};
     struct iovec iov = {.iov_base = data, .iov_len = size};
@@ -404,7 +404,7 @@ class HostBuffer : public Buffer {
    * @param size Buffer size in bytes
    * @return Vector of memory region handles
    */
-  inline static std::vector<struct fid_mr*> Register(std::vector<Channel>& channels, void* __restrict__ data, size_t size) {
+  static std::vector<struct fid_mr*> Register(std::vector<Channel>& channels, void* __restrict__ data, size_t size) {
     const size_t n = channels.size();
     std::vector<struct fid_mr*> mrs;
     mrs.reserve(n);
@@ -483,7 +483,7 @@ class DeviceDMABuffer : public Buffer {
    * @param device CUDA device ID
    * @return Memory region handle
    */
-  inline static struct fid_mr* Register(Channel& channel, void* __restrict__ data, size_t size, int dmabuf_fd, int device) {
+  static struct fid_mr* Register(Channel& channel, void* __restrict__ data, size_t size, int dmabuf_fd, int device) {
     struct fid_mr* mr;
     struct fi_mr_attr mr_attr = {};
     struct fi_mr_dmabuf dmabuf = {};
@@ -512,8 +512,7 @@ class DeviceDMABuffer : public Buffer {
    * @param device CUDA device ID
    * @return Vector of memory region handles
    */
-  inline static std::vector<struct fid_mr*>
-  Register(std::vector<Channel>& channels, void* __restrict__ data, size_t size, int dmabuf_fd, int device) {
+  static std::vector<struct fid_mr*> Register(std::vector<Channel>& channels, void* __restrict__ data, size_t size, int dmabuf_fd, int device) {
     const size_t n = channels.size();
     std::vector<struct fid_mr*> mrs;
     mrs.reserve(n);
@@ -559,7 +558,7 @@ class DevicePinBuffer : public Buffer {
    * @brief Get CPU-accessible mapped pointer
    * @return Pointer to CPU-accessible mapped memory
    */
-  [[nodiscard]] inline void* MappedData() noexcept { return mapped_data_; }
+  [[nodiscard]] void* MappedData() noexcept { return mapped_data_; }
 
   /**
    * @brief Get pointer to RDMA-registered data
@@ -711,7 +710,7 @@ class DevicePinBuffer : public Buffer {
    * @param device CUDA device ID
    * @return Memory region handle
    */
-  inline static struct fid_mr* Register(Channel& channel, void* __restrict__ data, size_t size, int device) {
+  static struct fid_mr* Register(Channel& channel, void* __restrict__ data, size_t size, int device) {
     struct fid_mr* mr;
     struct fi_mr_attr mr_attr = {};
     struct iovec iov = {.iov_base = data, .iov_len = size};
@@ -734,7 +733,7 @@ class DevicePinBuffer : public Buffer {
    * @param device CUDA device ID
    * @return Vector of memory region handles
    */
-  inline static std::vector<struct fid_mr*> Register(std::vector<Channel>& channels, void* __restrict__ data, size_t size, int device) {
+  static std::vector<struct fid_mr*> Register(std::vector<Channel>& channels, void* __restrict__ data, size_t size, int device) {
     std::vector<struct fid_mr*> mrs;
     mrs.reserve(channels.size());
     for (auto& ch : channels) {

@@ -26,7 +26,7 @@ struct DeviceContext {
 };
 
 /** @brief Merge contiguous device requests by (rank, type, addr) */
-static inline std::vector<DeviceRequest> Merge(std::vector<DeviceRequest>& reqs) {
+inline std::vector<DeviceRequest> Merge(std::vector<DeviceRequest>& reqs) {
   if (reqs.empty()) return {};
   auto cmp = [](const auto& a, const auto& b) { return std::tie(a.rank, a.type, a.addr) < std::tie(b.rank, b.type, b.addr); };
   std::sort(reqs.begin(), reqs.end(), cmp);

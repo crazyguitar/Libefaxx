@@ -58,7 +58,7 @@ class IO : private NoCopy {
    * @brief Get current time elapsed since IO instance creation
    * @return Time in milliseconds since start
    */
-  [[nodiscard]] milliseconds Time() const {
+  [[nodiscard]] milliseconds Time() const noexcept {
     const auto now = std::chrono::system_clock::now();
     return std::chrono::duration_cast<milliseconds>(now - start_);
   }
@@ -77,7 +77,7 @@ class IO : private NoCopy {
    * If the handle has already been executed (state is kUnschedule and
    * not in any queue), this is a no-op.
    */
-  void Cancel(Handle& handle) {
+  void Cancel(Handle& handle) noexcept {
     // Only cancel if the handle is currently scheduled
     if (handle.GetState() == Handle::kScheduled) [[likely]] {
       handle.SetState(Handle::kUnschedule);
@@ -99,7 +99,7 @@ class IO : private NoCopy {
    * @brief Schedule handle for immediate execution
    * @param handle Handle to execute
    */
-  void Call(Handle& handle) {
+  void Call(Handle& handle) noexcept {
     if (handle.GetState() == Handle::kScheduled) return;  // Already scheduled
     handle.SetState(Handle::kScheduled);
     ready_.emplace_back(std::addressof(handle));

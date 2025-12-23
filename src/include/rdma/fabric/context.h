@@ -18,6 +18,6 @@ struct Context {
 struct ImmContext : public Context {
   uint64_t imm_data;  ///< Immediate data value
 
-  ImmContext() : Context{}, imm_data(0) {}
-  ImmContext(uint64_t data) : Context{}, imm_data(data) {}
+  ImmContext() noexcept : Context{}, imm_data(0) {}
+  ImmContext(uint64_t data) noexcept : Context{}, imm_data(data) {}
 };
