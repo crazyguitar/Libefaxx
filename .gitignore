@@ -262,11 +262,3 @@ Sessionx.vim
 tags
 # Persistent undo
 [._]*.un~
-
-# End of https://www.toptal.com/developers/gitignore/api/vim,python,c,c++
-
-io_test
-_codeql_detected_source_root
-tests/io/io_test_asan
-tests/io/io_test
-build_io_test/
