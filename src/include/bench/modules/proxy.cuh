@@ -1,5 +1,5 @@
 /**
- * @file gin.cuh
+ * @file proxy.cuh
  * @brief GPU-Initiated Networking (GIN) module for proxy-based RDMA
  */
 #pragma once

@@ -48,7 +48,7 @@ struct PairVerifyCPU {
  * @tparam BufType Buffer type (DeviceDMABuffer or HostBuffer)
  * @tparam PairVerify Pair-aware verification functor
  */
-template <typename BufType, typename PairVerify = PairVerifyGPU>
+template <const char* Name, typename BufType, typename PairVerify = PairVerifyGPU>
 struct Test {
   static BenchResult Run(size_t size, const Options& opts, double link_bw) {
     FabricBench peer;
@@ -64,7 +64,7 @@ struct Test {
     double total_time = 0;
     for (int t = 1; t < world; ++t) {
       peer.Warmup(send, recv, PairBench<FabricBench>{t}, PairVerify{t}, opts.warmup);
-      auto r = peer.Bench(send, recv, PairBench<FabricBench>{t}, PairVerify{t}, opts.repeat);
+      auto r = peer.Bench(Name, send, recv, PairBench<FabricBench>{t}, PairVerify{t}, opts.repeat);
       total_bw += r.bw_gbps;
       total_time += r.time_us;
     }
@@ -91,8 +91,11 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
   return results;
 }
 
-using SingleDevice = Test<SymmetricDMAMemory, PairVerifyGPU>;  ///< GPU DMA buffer test
-using SingleHost = Test<SymmetricHostMemory, PairVerifyCPU>;   ///< Host pinned buffer test
+inline constexpr char kSingleDevice[] = "SingleDevice";
+inline constexpr char kSingleHost[] = "SingleHost";
+
+using SingleDevice = Test<kSingleDevice, SymmetricDMAMemory, PairVerifyGPU>;  ///< GPU DMA buffer test
+using SingleHost = Test<kSingleHost, SymmetricHostMemory, PairVerifyCPU>;     ///< Host pinned buffer test
 
 int main(int argc, char* argv[]) {
   try {

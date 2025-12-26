@@ -5,7 +5,7 @@
 #include <bench/arguments.h>
 #include <rdma/fabric/memory.h>
 
-#include <bench/modules/gin.cuh>
+#include <bench/modules/proxy.cuh>
 #include <bench/mpi/fabric.cuh>
 
 template <typename Peer, bool MultiChannel, template <typename, bool, typename> class Writer = ProxyWrite, typename Launcher = KernelBlocking>

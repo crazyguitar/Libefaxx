@@ -259,12 +259,13 @@ class FabricBench : public Peer {
    * @return Benchmark results
    */
   template <typename T, typename F, typename V>
-  BenchResult Bench(Buffers<T>& a, Buffers<T>& b, F&& func, V&& verify, int iters, size_t progress_bytes = 0, size_t progress_bw = 0) {
+  BenchResult
+  Bench(std::string_view name, Buffers<T>& a, Buffers<T>& b, F&& func, V&& verify, int iters, size_t progress_bytes = 0, size_t progress_bw = 0) {
     const auto rank = mpi.GetWorldRank();
     const size_t buf_size = a[rank == 0 ? 1 : 0]->Size();
     const size_t bytes = progress_bytes > 0 ? progress_bytes : buf_size;
     const size_t bw = progress_bw > 0 ? progress_bw : GetBandwidth(0);
-    Progress progress(iters, bw);
+    Progress progress(iters, bw, name);
     auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < iters; ++i) {
       func(*this, a, b);
