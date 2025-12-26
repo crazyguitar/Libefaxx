@@ -63,8 +63,9 @@ struct Test {
     auto [write, read] = peer.AllocPair<BufType>(size);
     peer.Handshake(write, read);
     peer.Warmup(write, read, Func{}, Verify{}, opts.warmup);
-    auto r = peer.Bench(Name, write, read, Func{}, Verify{}, opts.repeat);
     double link_bw = std::is_same_v<BWType, TotalLinkBW> ? total_bw : single_bw;
+    size_t progress_bw = static_cast<size_t>(link_bw * 1e9);
+    auto r = peer.Bench(Name, write, read, Func{}, Verify{}, opts.repeat, 0, progress_bw);
     r.bus_bw = (link_bw > 0) ? (r.bw_gbps / link_bw) * 100.0 : 0;
     return r;
   }

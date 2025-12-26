@@ -62,9 +62,10 @@ struct Test {
 
     double total_bw = 0;
     double total_time = 0;
+    size_t progress_bw = static_cast<size_t>(link_bw * 1e9);
     for (int t = 1; t < world; ++t) {
       peer.Warmup(send, recv, PairBench<FabricBench>{t}, PairVerify{t}, opts.warmup);
-      auto r = peer.Bench(Name, send, recv, PairBench<FabricBench>{t}, PairVerify{t}, opts.repeat);
+      auto r = peer.Bench(Name, send, recv, PairBench<FabricBench>{t}, PairVerify{t}, opts.repeat, 0, progress_bw);
       total_bw += r.bw_gbps;
       total_time += r.time_us;
     }

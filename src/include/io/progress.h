@@ -30,7 +30,7 @@ class Progress : private NoCopy {
   /**
    * @brief Construct progress tracker with expected totals
    * @param total_ops Expected total number of operations
-   * @param total_bw Expected total bandwidth in bytes/sec
+   * @param total_bw Expected total bandwidth in bits/sec
    * @param name Optional test name to display
    */
   Progress(size_t total_ops, size_t total_bw, std::string_view name = "") : total_ops_{total_ops}, total_bw_{total_bw}, name_{name} {}
@@ -55,7 +55,7 @@ class Progress : private NoCopy {
    * @param size Size per operation in bytes
    * @param ops Number of operations completed
    * @param total_ops Expected total operations
-   * @param total_bw Expected total bandwidth in bytes/sec
+   * @param total_bw Expected total bandwidth in bits/sec
    *
    * Output format: [name] [time] ops=current/total bytes=current/total bw=X.XXXGbps(XX.X%) lat=X.XXXus
    */

@@ -47,9 +47,10 @@ struct Test {
 
     double sum_bw = 0;
     double sum_time = 0;
+    size_t progress_bw = static_cast<size_t>(single_bw * 1e9);
     for (int t = 1; t < world; ++t) {
       peer.Warmup(write, read, PairWrite<FabricBench>{t, 0}, WriteVerifyGPU{t}, opts.warmup);
-      auto r = peer.Bench(Name, write, read, PairWrite<FabricBench>{t, 0}, WriteVerifyGPU{t}, opts.repeat);
+      auto r = peer.Bench(Name, write, read, PairWrite<FabricBench>{t, 0}, WriteVerifyGPU{t}, opts.repeat, 0, progress_bw);
       sum_bw += r.bw_gbps;
       sum_time += r.time_us;
     }
@@ -78,9 +79,10 @@ struct TestMulti {
 
     double sum_bw = 0;
     double sum_time = 0;
+    size_t progress_bw = static_cast<size_t>(total_bw * 1e9);  // Convert Gbps to bits/sec
     for (int t = 1; t < world; ++t) {
       peer.Warmup(write, read, PairWriteMulti<FabricBench>{t}, WriteVerifyGPU{t}, opts.warmup);
-      auto r = peer.Bench(Name, write, read, PairWriteMulti<FabricBench>{t}, WriteVerifyGPU{t}, opts.repeat);
+      auto r = peer.Bench(Name, write, read, PairWriteMulti<FabricBench>{t}, WriteVerifyGPU{t}, opts.repeat, 0, progress_bw);
       sum_bw += r.bw_gbps;
       sum_time += r.time_us;
     }
@@ -118,8 +120,8 @@ struct TestRoundRobin {
 
     peer.Warmup(write, read, func, noop, opts.warmup);
     size_t total_bytes = size * (world - 1);
-    size_t total_bw_bytes = static_cast<size_t>(total_bw * 1e9 / 8);
-    auto r = peer.Bench(Name, write, read, func, noop, opts.repeat, total_bytes, total_bw_bytes);
+    size_t progress_bw = static_cast<size_t>(total_bw * 1e9);  // Convert Gbps to bits/sec
+    auto r = peer.Bench(Name, write, read, func, noop, opts.repeat, total_bytes, progress_bw);
 
     // Total bandwidth = size * (world-1) targets / time
     double bw = (total_bytes * 8) / (r.time_us * 1e3);  // Gbps
