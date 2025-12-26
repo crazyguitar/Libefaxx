@@ -41,6 +41,18 @@ struct All2allMulti {
   }
 };
 
+/// All2all RDMA write (round-robin channel per peer)
+struct All2allRoundRobin {
+  template <typename T>
+  void operator()(FabricBench& peer, FabricBench::Buffers<T>& write, FabricBench::Buffers<T>& read) {
+    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    Run([&]() -> Coro<> {
+      co_await RunAll2allWriteRoundRobin(write, read, peer.efas.size(), peer.mpi.GetWorldSize(), peer.mpi.GetWorldRank());
+      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+    }());
+  }
+};
+
 /// Test configuration with bandwidth type
 template <typename BufType, typename Func, typename BWType = SingleLinkBW, typename Verify = VerifyGPU>
 struct Test {
@@ -69,6 +81,7 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
 
 using SingleDMA = Test<SymmetricDMAMemory, All2all, SingleLinkBW>;
 using MultiDMA = Test<SymmetricDMAMemory, All2allMulti, TotalLinkBW>;
+using RoundRobinDMA = Test<SymmetricDMAMemory, All2allRoundRobin, TotalLinkBW>;
 using SinglePin = Test<SymmetricPinMemory, All2all, SingleLinkBW>;
 using MultiPin = Test<SymmetricPinMemory, All2allMulti, TotalLinkBW>;
 
@@ -83,15 +96,15 @@ int main(int argc, char* argv[]) {
     double single_bw = peer.GetBandwidth(0) / 1e9;
     double total_bw = peer.GetTotalBandwidth() / 1e9;
 
-    std::vector<std::array<BenchResult, 4>> results;
+    std::vector<std::array<BenchResult, 5>> results;
     for (auto size : sizes) {
-      results.push_back(RunTests<SingleDMA, MultiDMA, SinglePin, MultiPin>(size, opts, single_bw, total_bw));
+      results.push_back(RunTests<SingleDMA, MultiDMA, RoundRobinDMA, SinglePin, MultiPin>(size, opts, single_bw, total_bw));
     }
 
     if (rank == 0) {
       FabricBench::Print(
           "EFA RDMA Write Benchmark", nranks, opts.warmup, opts.repeat, single_bw, "all-to-all RDMA write",
-          {"SingleDMA", "MultiDMA", "SinglePin", "MultiPin"}, results
+          {"SingleDMA", "MultiDMA", "RoundRobinDMA", "SinglePin", "MultiPin"}, results
       );
     }
     return 0;

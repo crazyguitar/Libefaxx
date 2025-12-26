@@ -171,6 +171,7 @@ class SymmetricMemory : public BufferType {
     co_return total_written;
   }
 
+ public:
   /**
    * @brief Wait for immediate data from all channels
    * @param imm_data Expected immediate data value (must be > 0)
