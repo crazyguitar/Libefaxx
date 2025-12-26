@@ -33,7 +33,7 @@ struct WriteVerifyGPU {
 /**
  * @brief Test configuration for single channel
  */
-template <typename BufType, typename BWType = SingleLinkBW>
+template <const char* Name, typename BufType, typename BWType = SingleLinkBW>
 struct Test {
   static BenchResult Run(size_t size, const Options& opts, double single_bw, double total_bw) {
     FabricBench peer;
@@ -49,7 +49,7 @@ struct Test {
     double sum_time = 0;
     for (int t = 1; t < world; ++t) {
       peer.Warmup(write, read, PairWrite<FabricBench>{t, 0}, WriteVerifyGPU{t}, opts.warmup);
-      auto r = peer.Bench(write, read, PairWrite<FabricBench>{t, 0}, WriteVerifyGPU{t}, opts.repeat);
+      auto r = peer.Bench(Name, write, read, PairWrite<FabricBench>{t, 0}, WriteVerifyGPU{t}, opts.repeat);
       sum_bw += r.bw_gbps;
       sum_time += r.time_us;
     }
@@ -64,7 +64,7 @@ struct Test {
 /**
  * @brief Test configuration for multi-channel
  */
-template <typename BufType, typename BWType = TotalLinkBW>
+template <const char* Name, typename BufType, typename BWType = TotalLinkBW>
 struct TestMulti {
   static BenchResult Run(size_t size, const Options& opts, double single_bw, double total_bw) {
     FabricBench peer;
@@ -80,7 +80,7 @@ struct TestMulti {
     double sum_time = 0;
     for (int t = 1; t < world; ++t) {
       peer.Warmup(write, read, PairWriteMulti<FabricBench>{t}, WriteVerifyGPU{t}, opts.warmup);
-      auto r = peer.Bench(write, read, PairWriteMulti<FabricBench>{t}, WriteVerifyGPU{t}, opts.repeat);
+      auto r = peer.Bench(Name, write, read, PairWriteMulti<FabricBench>{t}, WriteVerifyGPU{t}, opts.repeat);
       sum_bw += r.bw_gbps;
       sum_time += r.time_us;
     }
@@ -92,6 +92,43 @@ struct TestMulti {
   }
 };
 
+/**
+ * @brief Test configuration for round-robin (all targets in parallel)
+ */
+template <const char* Name, typename BufType, typename BWType = TotalLinkBW>
+struct TestRoundRobin {
+  static BenchResult Run(size_t size, const Options& opts, double single_bw, double total_bw) {
+    FabricBench peer;
+    peer.Exchange();
+    peer.Connect();
+    int world = peer.mpi.GetWorldSize();
+
+    auto [write, read] = peer.AllocPair<BufType>(size);
+    peer.Handshake(write, read);
+
+    size_t num_channels = peer.efas.size();
+    auto func = [&](FabricBench& p, FabricBench::Buffers<BufType>& w, FabricBench::Buffers<BufType>& r) {
+      for (auto& efa : p.efas) IO::Get().Join<FabricSelector>(efa);
+      ::Run([&]() -> Coro<> {
+        co_await RunWriteRoundRobin(w, r, num_channels, p.mpi.GetWorldSize(), p.mpi.GetWorldRank());
+        for (auto& efa : p.efas) IO::Get().Quit<FabricSelector>(efa);
+      }());
+    };
+    auto noop = [](auto&, auto&) {};
+
+    peer.Warmup(write, read, func, noop, opts.warmup);
+    size_t total_bytes = size * (world - 1);
+    size_t total_bw_bytes = static_cast<size_t>(total_bw * 1e9 / 8);
+    auto r = peer.Bench(Name, write, read, func, noop, opts.repeat, total_bytes, total_bw_bytes);
+
+    // Total bandwidth = size * (world-1) targets / time
+    double bw = (total_bytes * 8) / (r.time_us * 1e3);  // Gbps
+    double link_bw = std::is_same_v<BWType, TotalLinkBW> ? total_bw : single_bw;
+    double bus_bw = (link_bw > 0) ? (bw / link_bw) * 100.0 : 0;
+    return {size, r.time_us, bw, bus_bw};
+  }
+};
+
 template <typename... Tests>
 std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& opts, double single_bw, double total_bw) {
   std::array<BenchResult, sizeof...(Tests)> results;
@@ -100,9 +137,15 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
   return results;
 }
 
-using SinglePin = Test<SymmetricPinMemory, SingleLinkBW>;
-using SingleDMA = Test<SymmetricDMAMemory, SingleLinkBW>;
-using MultiDMA = TestMulti<SymmetricDMAMemory, TotalLinkBW>;
+inline constexpr char kSinglePin[] = "SinglePin";
+inline constexpr char kSingleDMA[] = "SingleDMA";
+inline constexpr char kMultiDMA[] = "MultiDMA";
+inline constexpr char kRoundRobinDMA[] = "RoundRobinDMA";
+
+using SinglePin = Test<kSinglePin, SymmetricPinMemory, SingleLinkBW>;
+using SingleDMA = Test<kSingleDMA, SymmetricDMAMemory, SingleLinkBW>;
+using MultiDMA = TestMulti<kMultiDMA, SymmetricDMAMemory, TotalLinkBW>;
+using RoundRobinDMA = TestRoundRobin<kRoundRobinDMA, SymmetricDMAMemory, TotalLinkBW>;
 
 int main(int argc, char* argv[]) {
   try {
@@ -115,15 +158,15 @@ int main(int argc, char* argv[]) {
     double single_bw = peer.GetBandwidth(0) / 1e9;
     double total_bw = peer.GetTotalBandwidth() / 1e9;
 
-    std::vector<std::array<BenchResult, 3>> results;
+    std::vector<std::array<BenchResult, 4>> results;
     for (auto size : sizes) {
-      results.push_back(RunTests<SinglePin, SingleDMA, MultiDMA>(size, opts, single_bw, total_bw));
+      results.push_back(RunTests<SinglePin, SingleDMA, MultiDMA, RoundRobinDMA>(size, opts, single_bw, total_bw));
     }
 
     if (rank == 0) {
       FabricBench::Print(
           "EFA Write Benchmark", nranks, opts.warmup, opts.repeat, single_bw, "rank0 -> rank_k (k=1..N-1), averaged across all pairs",
-          {"SinglePin", "SingleDMA", "MultiDMA"}, results
+          {"SinglePin", "SingleDMA", "MultiDMA", "RoundRobinDMA"}, results
       );
     }
     return 0;

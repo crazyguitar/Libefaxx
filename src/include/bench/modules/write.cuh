@@ -101,3 +101,32 @@ struct PairWriteMulti {
     }());
   }
 };
+
+/**
+ * @brief Rank 0 writes to all targets in parallel using round-robin channels
+ *
+ * Each target uses a different channel: ch = target % num_channels
+ * This enables parallel writes across channels when multiple targets exist.
+ */
+template <typename T>
+Coro<> RunWriteRoundRobin(
+    std::vector<std::unique_ptr<T>>& write_bufs,
+    std::vector<std::unique_ptr<T>>& read_bufs,
+    size_t num_channels,
+    int world_size,
+    int rank
+) {
+  if (rank != 0) {
+    // Non-rank-0: wait for incoming write from rank 0
+    size_t ch = rank % num_channels;
+    co_await read_bufs[0]->WaitImmdata(T::EncodeImmdata(1, ch));
+    co_return;
+  }
+  // Rank 0: write to all targets in parallel using different channels
+  std::vector<Future<Coro<ssize_t>>> wfuts;
+  for (int target = 1; target < world_size; ++target) {
+    size_t ch = target % num_channels;
+    wfuts.emplace_back(write_bufs[target]->Writeall(target, T::EncodeImmdata(1, ch), ch));
+  }
+  for (auto& fut : wfuts) co_await fut;
+}

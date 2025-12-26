@@ -41,8 +41,20 @@ struct All2allMulti {
   }
 };
 
+/// All2all RDMA write (round-robin channel per peer)
+struct All2allRoundRobin {
+  template <typename T>
+  void operator()(FabricBench& peer, FabricBench::Buffers<T>& write, FabricBench::Buffers<T>& read) {
+    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    Run([&]() -> Coro<> {
+      co_await RunAll2allWriteRoundRobin(write, read, peer.efas.size(), peer.mpi.GetWorldSize(), peer.mpi.GetWorldRank());
+      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+    }());
+  }
+};
+
 /// Test configuration with bandwidth type
-template <typename BufType, typename Func, typename BWType = SingleLinkBW, typename Verify = VerifyGPU>
+template <const char* Name, typename BufType, typename Func, typename BWType = SingleLinkBW, typename Verify = VerifyGPU>
 struct Test {
   static BenchResult Run(size_t size, const Options& opts, double single_bw, double total_bw) {
     FabricBench peer;
@@ -51,7 +63,7 @@ struct Test {
     auto [write, read] = peer.AllocPair<BufType>(size);
     peer.Handshake(write, read);
     peer.Warmup(write, read, Func{}, Verify{}, opts.warmup);
-    auto r = peer.Bench(write, read, Func{}, Verify{}, opts.repeat);
+    auto r = peer.Bench(Name, write, read, Func{}, Verify{}, opts.repeat);
     double link_bw = std::is_same_v<BWType, TotalLinkBW> ? total_bw : single_bw;
     r.bus_bw = (link_bw > 0) ? (r.bw_gbps / link_bw) * 100.0 : 0;
     return r;
@@ -67,10 +79,17 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
   return results;
 }
 
-using SingleDMA = Test<SymmetricDMAMemory, All2all, SingleLinkBW>;
-using MultiDMA = Test<SymmetricDMAMemory, All2allMulti, TotalLinkBW>;
-using SinglePin = Test<SymmetricPinMemory, All2all, SingleLinkBW>;
-using MultiPin = Test<SymmetricPinMemory, All2allMulti, TotalLinkBW>;
+inline constexpr char kSingleDMA[] = "SingleDMA";
+inline constexpr char kMultiDMA[] = "MultiDMA";
+inline constexpr char kRoundRobinDMA[] = "RoundRobinDMA";
+inline constexpr char kSinglePin[] = "SinglePin";
+inline constexpr char kMultiPin[] = "MultiPin";
+
+using SingleDMA = Test<kSingleDMA, SymmetricDMAMemory, All2all, SingleLinkBW>;
+using MultiDMA = Test<kMultiDMA, SymmetricDMAMemory, All2allMulti, TotalLinkBW>;
+using RoundRobinDMA = Test<kRoundRobinDMA, SymmetricDMAMemory, All2allRoundRobin, TotalLinkBW>;
+using SinglePin = Test<kSinglePin, SymmetricPinMemory, All2all, SingleLinkBW>;
+using MultiPin = Test<kMultiPin, SymmetricPinMemory, All2allMulti, TotalLinkBW>;
 
 int main(int argc, char* argv[]) {
   try {
@@ -83,15 +102,15 @@ int main(int argc, char* argv[]) {
     double single_bw = peer.GetBandwidth(0) / 1e9;
     double total_bw = peer.GetTotalBandwidth() / 1e9;
 
-    std::vector<std::array<BenchResult, 4>> results;
+    std::vector<std::array<BenchResult, 5>> results;
     for (auto size : sizes) {
-      results.push_back(RunTests<SingleDMA, MultiDMA, SinglePin, MultiPin>(size, opts, single_bw, total_bw));
+      results.push_back(RunTests<SingleDMA, MultiDMA, RoundRobinDMA, SinglePin, MultiPin>(size, opts, single_bw, total_bw));
     }
 
     if (rank == 0) {
       FabricBench::Print(
           "EFA RDMA Write Benchmark", nranks, opts.warmup, opts.repeat, single_bw, "all-to-all RDMA write",
-          {"SingleDMA", "MultiDMA", "SinglePin", "MultiPin"}, results
+          {"SingleDMA", "MultiDMA", "RoundRobinDMA", "SinglePin", "MultiPin"}, results
       );
     }
     return 0;
