@@ -259,15 +259,16 @@ class FabricBench : public Peer {
    * @return Benchmark results
    */
   template <typename T, typename F, typename V>
-  BenchResult Bench(Buffers<T>& a, Buffers<T>& b, F&& func, V&& verify, int iters) {
+  BenchResult Bench(Buffers<T>& a, Buffers<T>& b, F&& func, V&& verify, int iters, size_t progress_bytes = 0, size_t progress_bw = 0) {
     const auto rank = mpi.GetWorldRank();
     const size_t buf_size = a[rank == 0 ? 1 : 0]->Size();
-    const size_t bw = GetBandwidth(0);
+    const size_t bytes = progress_bytes > 0 ? progress_bytes : buf_size;
+    const size_t bw = progress_bw > 0 ? progress_bw : GetBandwidth(0);
     Progress progress(iters, bw);
     auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < iters; ++i) {
       func(*this, a, b);
-      if (rank == 0 && i % Progress::kPrintFreq == 0) progress.Print(std::chrono::high_resolution_clock::now(), buf_size, i + 1);
+      if (rank == 0 && i % Progress::kPrintFreq == 0) progress.Print(std::chrono::high_resolution_clock::now(), bytes, i + 1);
     }
     auto end = std::chrono::high_resolution_clock::now();
     MPI_Barrier(MPI_COMM_WORLD);
