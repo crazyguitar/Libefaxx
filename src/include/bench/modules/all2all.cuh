@@ -59,7 +59,7 @@ Coro<> RunAll2allWriteRoundRobin(
     size_t send_ch = (peer + rank) % num_channels;
     size_t recv_ch = (rank + peer) % num_channels;
     rfuts.emplace_back(read_bufs[peer]->WaitImmdata(T::EncodeImmdata(peer + 1, recv_ch)));
-    wfuts.emplace_back(write_bufs[peer]->Write(peer, T::EncodeImmdata(rank + 1, send_ch), send_ch));
+    wfuts.emplace_back(write_bufs[peer]->Writeall(peer, T::EncodeImmdata(rank + 1, send_ch), send_ch));
   }
   for (auto& fut : wfuts) co_await fut;
   for (auto& fut : rfuts) co_await fut;
