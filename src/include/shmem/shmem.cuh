@@ -4,6 +4,9 @@
  *
  * Provides shmem_* APIs similar to NVSHMEM for GPU-initiated communication.
  * Uses MPI for bootstrap and libfabric for RDMA transport.
+ *
+ * @note Current implementation only supports inter-node communication
+ *       (1 process per node). Intra-node communication is not supported.
  */
 #pragma once
 

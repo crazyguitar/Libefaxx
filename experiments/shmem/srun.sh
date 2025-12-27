@@ -1,4 +1,8 @@
 #!/bin/bash
+#
+# NOTE: Current shmem_* implementation only supports inter-node communication
+#       (1 process per node). Intra-node communication is not supported.
+#
 
 set -exo pipefail
 

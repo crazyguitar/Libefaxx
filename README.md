@@ -125,6 +125,7 @@ following example experiments, which illustrate common usage patterns and benchm
 * [Alltoall](experiments/all2all): Benchmarks a simple all-to-all communication pattern over EFA.
 * [Queue](experiments/queue): Benchmarks a multi-producer, single-consumer (MPSC) queue between GPU and CPU.
 * [Proxy](experiments/proxy): Benchmarks GPU-initiated RDMA writes via a CPU proxy coroutine.
+* [SHMEM](experiments/shmem): NVSHMEM-like API example demonstrating `shmem_*` interface over EFA.
 
 ## Citation
 
