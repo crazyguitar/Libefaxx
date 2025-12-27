@@ -1,4 +1,10 @@
 #!/bin/bash
+#
+# Enroot image builder script
+#
+# This script builds a Docker image and converts it to an Enroot squashfs
+# image for use with Slurm container integration.
+#
 
 FILE="${PWD}/Dockerfile"
 IMAGE=""
@@ -6,10 +12,12 @@ INPUT="${PWD}"
 PROGRAM="$0"
 OUTPUT="${PWD}"
 
+# Log error message with timestamp to stderr
 err() {
   echo -e "[$(date +'%Y-%m-%dT%H:%M:%S%z')][error] $*" >&2
 }
 
+# Display usage information
 usage() {
   set +x
   cat <<EOF
@@ -29,6 +37,10 @@ example:
 EOF
 }
 
+# Convert Docker image to Enroot squashfs format
+# Args:
+#   $1 - Docker image name
+#   $2 - Output directory for squashfs file
 run() {
   local image="${1}"
   local output="${2}"
@@ -62,6 +74,11 @@ run() {
   fi
 }
 
+# Build Docker image from Dockerfile
+# Args:
+#   $1 - Path to Dockerfile
+#   $2 - Docker image name/tag
+#   $3 - Build context directory
 build() {
   local file="${1}"
   local image="${2}"

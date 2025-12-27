@@ -1,4 +1,10 @@
 #!/bin/bash
+#
+# Build script for Libefaxx project
+#
+# This script configures and builds the project using CMake and Ninja.
+# It supports clean builds and parallel compilation.
+#
 
 set -uo pipefail
 
@@ -7,14 +13,17 @@ PROGRAM="$0"
 CLEAN=false
 JOBS=$(nproc)
 
+# Log info message with timestamp
 info() {
   echo -e "[$(date +'%Y-%m-%dT%H:%M:%S%z')][info] $*"
 }
 
+# Log error message with timestamp to stderr
 err() {
   echo -e "[$(date +'%Y-%m-%dT%H:%M:%S%z')][error] $*" >&2
 }
 
+# Display usage information
 usage() {
   cat <<EOF
 Usage:  $PROGRAM [OPTIONS]
@@ -26,6 +35,10 @@ Options:
 EOF
 }
 
+# Build the project using CMake and Ninja
+# Args:
+#   $1 - Number of parallel jobs
+#   $2 - Whether to clean build directory first (true/false)
 build() {
   local jobs="$1"
   local clean="$2"
