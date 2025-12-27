@@ -11,7 +11,5 @@ For example, [PyTorch NCCL process group](https://pytorch.org/docs/stable/distri
 requires a master address to create a TCPStore server, allowing slave processes
 to connect and exchange NCCL IDs for communication. Similarly, [NVSHMEM](https://developer.nvidia.com/nvshmem)
 uses an MPI-based bootstrap where processes exchange peer IDs via MPI before calling
-NVSHMEM APIs.
-
-In this example, we follow a similar approach, exchanging **EFA endpoints via MPI**
+NVSHMEM APIs. In this example, we follow a similar approach, exchanging **EFA endpoints via MPI**
 to initialize connections, analogous to the MPI bootstrap used in NVSHMEM.

@@ -1,29 +1,66 @@
 # Echo
 
-This example demonstrates how to use [C++20 coroutines](https://en.cppreference.com/w/cpp/language/coroutines)
-for asynchronous I/O and is not directly tied to RDMA itself. The example in `main.cu`
-demonstrates the behavior of the echo server and client using C++20 coroutine syntax.
-Coroutines introduce a modern event-driven programming model that helps mitigate
-*callback hell* and reduces reliance on global state management, making
-asynchronous workflows clearer and more maintainable.
+This example demonstrates how to build asynchronous network applications using
+[C++20 coroutines](https://en.cppreference.com/w/cpp/language/coroutines). The
+`main.cu` file implements a TCP echo server and client that showcase coroutine-based
+async I/O patterns. By using `co_await` and `co_return`, coroutines enable an
+event-driven programming model that avoids *callback hell* and eliminates complex
+global state management, resulting in cleaner, more maintainable asynchronous code.
 
-While coroutines provide compiler-level syntax, they do not include a standardized
-runtime for scheduling or I/O polling. Developers must implement a **scheduler** and
-**selector** to manage coroutine execution and event readiness.
+## Event Loop Implementation
 
-This design is particularly relevant for **RDMA APIs**, such as those provided by
-[libfabric](https://ofiwg.github.io/libfabric/), where operations are typically
-asynchronous and applications often poll a **completion queue (CQ)** to check whether
-RDMA send/receive operations have completed. Traditional callback-based implementations
-for CQ polling can lead to complex code with many callbacks and global state. By
-leveraging C++20 coroutines, these workflows can be expressed sequentially, with the
-scheduler acting as the event loop and the CQ polling as the I/O selector.
+Unlike Python's [asyncio](https://docs.python.org/3/library/asyncio.html) or
+JavaScript's [async/await](https://developer.mozilla.org/en-US/docs/Learn/JavaScript/Asynchronous/Promises),
+C++20 coroutines do not include a built-in runtime for task scheduling or I/O polling.
+This project implements a lightweight event loop with two core components:
 
-In this project, we implement a lightweight **scheduler** and **RDMA selector**,
-enabling developers to write coroutine-based logic using `co_await` and `co_return`,
-similar to Python’s [asyncio](https://docs.python.org/3/library/asyncio.html) or
-JavaScript’s [async/await](https://developer.mozilla.org/en-US/docs/Learn/JavaScript/Asynchronous/Promises).
-The Echo example demonstrates a coroutine-based TCP echo server and client, showing
-how C++20 coroutines can simplify event-driven network programming. RDMA-based
-examples using an event loop, such as [sendrecv](../sendrecv), are provided in
-later examples.
+- **Scheduler**: Manages coroutine lifecycle using a priority queue and timer
+- **Selector**: Polls for I/O readiness (e.g., epoll, kqueue) and resumes waiting coroutines
+
+This architecture maps naturally to **RDMA (Remote Direct Memory Access)** programming
+with libraries like [libfabric](https://ofiwg.github.io/libfabric/). In RDMA workflows,
+applications poll a **completion queue (CQ)** to check operation status—a pattern
+that traditionally requires complex callback chains. With this event loop, the
+scheduler manages coroutine execution while CQ polling serves as the selector,
+allowing RDMA operations to be written as sequential, readable code. See
+[sendrecv](../sendrecv) for RDMA-based examples.
+
+```
+Event Loop Flow
+
+                         ┌───────┐
+                         │ Start │
+                         └───┬───┘
+                             │
+                             ▼
+                   ┌─────────────────────┐
+              ┌───►│ Get next coroutine  │
+              │    └──────────┬──────────┘
+              │               │
+              │               ▼
+              │    ┌─────────────────────┐
+              │    │  Resume coroutine   │
+              │    └──────────┬──────────┘
+              │               │
+              │    ┌──────────┴──────────┐
+              │    │                     │
+              │ co_await              co_return
+              │    │                     │
+              │    ▼                     ▼
+              │ ┌──────────────┐   ┌───────────┐
+              │ │ Register I/O │   │  Complete │
+              │ │ with Selector│   └───────────┘
+              │ └──────┬───────┘
+              │        │
+              │        ▼
+              │ ┌──────────────┐
+              │ │  Poll I/O    │
+              │ │  readiness   │
+              │ └──────┬───────┘
+              │        │
+              │        ▼
+              │ ┌──────────────┐
+              └─┤ I/O ready,   │
+                │ re-schedule  │
+                └──────────────┘
+```
