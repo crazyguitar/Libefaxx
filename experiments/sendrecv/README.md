@@ -47,6 +47,8 @@ The benchmark tests two buffer types:
 
 ## Results
 
+Benchmark results on p5.48xlarge (2 nodes, 1 rank per node, single EFA channel):
+
 | Size | Count    | Device (Gbps) | BusBW (%) | Lat (us)  | Host (Gbps) | BusBW (%) | Lat (us)  |
 |-----:|---------:|--------------:|----------:|----------:|------------:|----------:|----------:|
 | 128K |    32768 |          9.75 |       9.8 |    107.52 |        7.14 |       7.1 |    146.79 |
@@ -60,3 +62,9 @@ The benchmark tests two buffer types:
 |  32M |  8388608 |         47.33 |      47.3 |   5671.67 |       47.00 |      47.0 |   5711.56 |
 |  64M | 16777216 |         47.97 |      48.0 |  11191.56 |       47.71 |      47.7 |  11252.39 |
 | 128M | 33554432 |         48.28 |      48.3 |  22237.97 |       48.23 |      48.2 |  22262.47 |
+
+Both Device (GPU DMABUF) and Host (pinned memory) achieve ~48 Gbps at large message
+sizes, approaching the theoretical 100 Gbps EFA link bandwidth (~48% utilization).
+At smaller sizes, Device memory shows slightly better bandwidth due to lower
+registration overhead. The performance gap narrows as message size increases,
+where transfer time dominates over setup costs.
