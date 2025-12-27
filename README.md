@@ -138,14 +138,14 @@ See [CITATION.cff](CITATION.cff) for machine-readable citation information.
   year = {2025},
   month = {12},
   url = {https://github.com/crazyguitar/Libefaxx},
-  version = {1.0.0},
+  version = {0.2.4},
   abstract = {High-performance RDMA communication experiments using CUDA and Amazon Elastic Fabric Adapter (EFA)},
   keywords = {RDMA, CUDA, EFA, High-Performance Computing, GPU Communication, Amazon EFA, Fabric, MPI}
 }
 ```
 
 ### APA Style
-Tsai, C.-N. (2025). *AWS EFA GPU Benchmark* (Version 1.0.0) [Computer software]. https://github.com/crazyguitar/Libefaxx
+Tsai, C.-N. (2025). *AWS EFA GPU Benchmark* (Version 0.2.4) [Computer software]. https://github.com/crazyguitar/Libefaxx
 
 ## References
 
