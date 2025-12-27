@@ -122,20 +122,22 @@ __device__ __forceinline__ void shmem_fence() { Fence(); }
 __device__ __forceinline__ void shmem_quiet(DeviceContext ctx) { Quiet(ctx.posted, ctx.completed); }
 
 /**
- * @brief Put a single int to remote PE (non-blocking)
+ * @brief Template put a single value to remote PE (non-blocking)
+ * @tparam T Value type
  * @param ctx Device context from shmem_ctx
  * @param dest Destination address in symmetric memory
  * @param value Value to write
  * @param pe Target PE index
  */
-__device__ __forceinline__ void shmem_int_p_nbi(DeviceContext ctx, int* __restrict__ dest, int value, int pe) {
+template <typename T>
+__device__ __forceinline__ void shmem_p_nbi(DeviceContext ctx, T* __restrict__ dest, T value, int pe) {
   *dest = value;
   __threadfence_system();
   if (threadIdx.x == 0) {
     DeviceRequest req{
         .type = static_cast<uint64_t>(DeviceRequestType::kPut),
         .rank = static_cast<uint64_t>(pe),
-        .size = sizeof(int),
+        .size = sizeof(T),
         .addr = reinterpret_cast<uint64_t>(dest),
         .imm = 1
     };
@@ -147,15 +149,48 @@ __device__ __forceinline__ void shmem_int_p_nbi(DeviceContext ctx, int* __restri
 }
 
 /**
- * @brief Put a single int to remote PE (blocking)
+ * @brief Template put a single value to remote PE (blocking)
+ * @tparam T Value type
  * @param ctx Device context from shmem_ctx
  * @param dest Destination address in symmetric memory
  * @param value Value to write
  * @param pe Target PE index
  */
-__device__ __forceinline__ void shmem_int_p(DeviceContext ctx, int* dest, int value, int pe) {
-  shmem_int_p_nbi(ctx, dest, value, pe);
+template <typename T>
+__device__ __forceinline__ void shmem_p(DeviceContext ctx, T* __restrict__ dest, T value, int pe) {
+  shmem_p_nbi(ctx, dest, value, pe);
   shmem_quiet(ctx);
 }
+
+// Type-specific wrappers via macro
+#define SHMEM_TYPE_P_IMPL(NAME, TYPE)                                                                                                    \
+  __device__ __forceinline__ void shmem_##NAME##_p(DeviceContext ctx, TYPE* dest, TYPE value, int pe) { shmem_p(ctx, dest, value, pe); } \
+  __device__ __forceinline__ void shmem_##NAME##_p_nbi(DeviceContext ctx, TYPE* dest, TYPE value, int pe) { shmem_p_nbi(ctx, dest, value, pe); }
+
+SHMEM_TYPE_P_IMPL(char, char)
+SHMEM_TYPE_P_IMPL(schar, signed char)
+SHMEM_TYPE_P_IMPL(short, short)
+SHMEM_TYPE_P_IMPL(int, int)
+SHMEM_TYPE_P_IMPL(long, long)
+SHMEM_TYPE_P_IMPL(longlong, long long)
+SHMEM_TYPE_P_IMPL(uchar, unsigned char)
+SHMEM_TYPE_P_IMPL(ushort, unsigned short)
+SHMEM_TYPE_P_IMPL(uint, unsigned int)
+SHMEM_TYPE_P_IMPL(ulong, unsigned long)
+SHMEM_TYPE_P_IMPL(ulonglong, unsigned long long)
+SHMEM_TYPE_P_IMPL(int8, int8_t)
+SHMEM_TYPE_P_IMPL(int16, int16_t)
+SHMEM_TYPE_P_IMPL(int32, int32_t)
+SHMEM_TYPE_P_IMPL(int64, int64_t)
+SHMEM_TYPE_P_IMPL(uint8, uint8_t)
+SHMEM_TYPE_P_IMPL(uint16, uint16_t)
+SHMEM_TYPE_P_IMPL(uint32, uint32_t)
+SHMEM_TYPE_P_IMPL(uint64, uint64_t)
+SHMEM_TYPE_P_IMPL(size, size_t)
+SHMEM_TYPE_P_IMPL(ptrdiff, ptrdiff_t)
+SHMEM_TYPE_P_IMPL(float, float)
+SHMEM_TYPE_P_IMPL(double, double)
+
+#undef SHMEM_TYPE_P_IMPL
 
 #endif  // __CUDACC__
