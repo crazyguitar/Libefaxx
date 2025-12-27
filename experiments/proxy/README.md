@@ -55,3 +55,22 @@ the NBI pipelining effectively hides the GPU-CPU queue latency. ProxyMultiNBI sc
 ~379 Gbps (~95% of 4x100G) by combining NBI pipelining with multi-channel parallelism.
 Blocking modes (ProxySingle/ProxyMulti) show lower efficiency due to GPU idle time
 waiting for each RDMA completion before pushing the next request.
+
+## Queue Latency
+
+The GPU-CPU [MPSC queue](../queue) latency directly impacts proxy performance:
+
+| Size | Blocking (Gbps) | Lat (us) | NBI (Gbps) | Lat (us) |
+|-----:|----------------:|---------:|-----------:|---------:|
+|    8 |            0.01 |   123.88 |       0.03 |    31.36 |
+|   16 |            0.01 |   137.37 |       0.04 |    26.69 |
+|   32 |            0.01 |   165.96 |       0.04 |    24.45 |
+|   64 |            0.00 |   220.72 |       0.04 |    22.61 |
+|  128 |            0.00 |   341.69 |       0.05 |    21.61 |
+|  256 |            0.00 |   489.83 |       0.04 |    22.92 |
+|  512 |            0.00 |   527.54 |       0.04 |    25.81 |
+| 1024 |            0.00 |   534.86 |       0.03 |    33.26 |
+
+Blocking mode incurs 100-500us latency per operation due to GPU waiting for completion.
+NBI mode reduces latency to ~22-33us by pipelining pushes without waiting, explaining
+the significant performance improvement in the proxy benchmark.
