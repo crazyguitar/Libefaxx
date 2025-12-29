@@ -1,5 +1,5 @@
-file(GLOB src *.cu)
-set(target queue)
+file(GLOB src *.cu *.cc)
+set(target ipc)
 set(CMAKE_CUDA_ARCHITECTURES 80 90)
 
 add_executable(${target} ${src})
