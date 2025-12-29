@@ -14,10 +14,24 @@ void shmem_proxy(void* ptr, int send_count, int recv_count) {
   auto& peer = shmem_peer();
   auto& mem = shmem_mem(ptr);
   auto ctx = shmem_ctx(ptr);
+  int npes = shmem_n_pes();
+  int mype = shmem_my_pe();
+  int next_pe = (mype + 1) % npes;
+  int prev_pe = (mype - 1 + npes) % npes;
+
+  // Check if we need RDMA for send or receive
+  bool need_rdma_send = !(ctx.ipc_ptrs && ctx.ipc_ptrs[next_pe]);
+  bool need_rdma_recv = !(ctx.ipc_ptrs && ctx.ipc_ptrs[prev_pe]);
+
+  // All communication is IPC, no RDMA proxy needed
+  if (!need_rdma_send && !need_rdma_recv) return;
+
+  int rdma_send_count = need_rdma_send ? send_count : 0;
+  int rdma_recv_count = need_rdma_recv ? recv_count : 0;
 
   for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
   Run([&]() -> Coro<> {
-    for (int done = 0; done < send_count;) {
+    for (int done = 0; done < rdma_send_count;) {
       DeviceRequest req;
       if (!ctx.queue->Pop(req)) {
         co_await YieldAwaiter{};
@@ -27,7 +41,7 @@ void shmem_proxy(void* ptr, int send_count, int recv_count) {
       mem.Complete();
       ++done;
     }
-    for (int i = 0; i < recv_count; ++i) co_await mem.WaitImmdata(1);
+    for (int i = 0; i < rdma_recv_count; ++i) co_await mem.WaitImmdata(1);
     for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
   }());
 }

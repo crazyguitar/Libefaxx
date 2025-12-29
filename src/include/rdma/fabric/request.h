@@ -20,9 +20,10 @@ struct DeviceRequest {
 
 /** @brief Context for GPU kernel to access queue and counters */
 struct DeviceContext {
-  Queue<DeviceRequest>* queue;
-  uint64_t* posted;
-  uint64_t* completed;
+  Queue<DeviceRequest>* __restrict__ queue;
+  uint64_t* __restrict__ posted;
+  uint64_t* __restrict__ completed;
+  void* const* __restrict__ ipc_ptrs;  ///< Array of IPC pointers indexed by rank (nullptr for remote ranks)
 };
 
 /** @brief Merge contiguous device requests by (rank, type, addr) */

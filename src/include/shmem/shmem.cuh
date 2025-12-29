@@ -1,12 +1,9 @@
 /**
  * @file shmem.cuh
- * @brief NVSHMEM-like API over EFA/libfabric
+ * @brief NVSHMEM-like API over EFA/libfabric with CUDA IPC support
  *
  * Provides shmem_* APIs similar to NVSHMEM for GPU-initiated communication.
- * Uses MPI for bootstrap and libfabric for RDMA transport.
- *
- * @note Current implementation only supports inter-node communication
- *       (1 process per node). Intra-node communication is not supported.
+ * Uses MPI for bootstrap, CUDA IPC for intra-node, and libfabric for inter-node.
  */
 #pragma once
 
@@ -62,10 +59,32 @@ inline void shmem_finalize() {
   int rank = peer.mpi.GetWorldRank();
   int world = peer.mpi.GetWorldSize();
 
+  // Create symmetric memory
   int target = (rank + 1) % world;
   int source = (rank - 1 + world) % world;
   auto mem = std::make_unique<SymmetricDMAMemory>(peer.channels[target], size, world, peer.device);
 
+  // Exchange IPC handles among local ranks
+  const int local_size = peer.mpi.GetLocalSize();
+  const int local_rank = peer.mpi.GetLocalRank();
+  const int world_rank = peer.mpi.GetWorldRank();
+
+  if (local_size > 1) {
+    std::vector<cudaIpcMemHandle_t> all_handles(local_size);
+    std::vector<int> local_world_ranks(local_size);
+
+    cudaIpcMemHandle_t local_handle;
+    CUDA_CHECK(cudaIpcGetMemHandle(&local_handle, mem->Data()));
+
+    MPI_Comm local = peer.mpi.GetLocalComm();
+    size_t hsz = sizeof(cudaIpcMemHandle_t);
+    MPI_Allgather(&world_rank, 1, MPI_INT, local_world_ranks.data(), 1, MPI_INT, local);
+    MPI_Allgather(&local_handle, hsz, MPI_BYTE, all_handles.data(), hsz, MPI_BYTE, local);
+
+    mem->OpenIPCHandles(all_handles, local_world_ranks, local_rank);
+  }
+
+  // Exchange RDMA keys (always do this for ring pattern)
   auto local_rma = mem->GetLocalRmaIovs();
   size_t sz = local_rma.size() * sizeof(fi_rma_iov);
   std::vector<fi_rma_iov> target_iovs(local_rma.size());
@@ -97,7 +116,6 @@ inline void shmem_barrier_all() noexcept { MPI_Barrier(MPI_COMM_WORLD); }
 
 /**
  * @brief Get symmetric memory object for a pointer
- * @param ptr Pointer returned by shmem_malloc
  * @return Reference to SymmetricDMAMemory
  */
 [[nodiscard]] inline SymmetricDMAMemory& shmem_mem(void* ptr) noexcept { return *shmem::detail::g_allocs.at(ptr); }
@@ -130,10 +148,14 @@ __device__ __forceinline__ void shmem_quiet(DeviceContext ctx) { Quiet(ctx.poste
  * @param pe Target PE index
  */
 template <typename T>
-__device__ __forceinline__ void shmem_p_nbi(DeviceContext ctx, T* __restrict__ dest, T value, int pe) {
-  *dest = value;
-  __threadfence_system();
-  if (threadIdx.x == 0) {
+__device__ __forceinline__ void shmem_p_nbi(const DeviceContext ctx, T* __restrict__ dest, const T value, const int pe) {
+  if (ctx.ipc_ptrs[pe]) {
+    // Intra-node: Direct IPC memory access
+    static_cast<T*>(ctx.ipc_ptrs[pe])[0] = value;
+  } else {
+    // Inter-node: RDMA via queue
+    *dest = value;
+    __threadfence_system();
     DeviceRequest req{
         .type = static_cast<uint64_t>(DeviceRequestType::kPut),
         .rank = static_cast<uint64_t>(pe),
@@ -143,9 +165,8 @@ __device__ __forceinline__ void shmem_p_nbi(DeviceContext ctx, T* __restrict__ d
     };
     while (!ctx.queue->Push(req)) __threadfence_system();
     reinterpret_cast<cuda::std::atomic<uint64_t>*>(ctx.posted)->fetch_add(1ULL, cuda::std::memory_order_relaxed);
-    shmem_fence();
   }
-  __syncthreads();
+  __threadfence_system();
 }
 
 /**
