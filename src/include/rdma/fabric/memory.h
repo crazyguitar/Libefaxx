@@ -221,20 +221,20 @@ class SymmetricMemory : public BufferType {
   /** @brief Increment completed counter (called by CPU after RDMA completion) */
   void Complete() noexcept { reinterpret_cast<cuda::std::atomic<uint64_t>*>(completed_)->fetch_add(1, cuda::std::memory_order_relaxed); }
 
-  /** @brief Open IPC handles from peer ranks */
+  /** @brief Open IPC handles from peer ranks on the same node */
   template <typename T = BufferType>
   typename std::enable_if_t<std::is_same_v<T, DeviceDMABuffer>, void>
-  OpenIPCHandles(const std::vector<cudaIpcMemHandle_t>& handles, const std::vector<int>& world_ranks, int local_rank) {
+  OpenIPCHandles(const std::vector<cudaIpcMemHandle_t>& handles, const std::vector<int>& local_world_ranks, int local_rank) {
     for (size_t i = 0; i < handles.size(); ++i) {
-      int peer_world_rank = world_ranks[i];
+      int peer = local_world_ranks[i];
       if (static_cast<int>(i) == local_rank) {
-        ipc_remote_ptrs_[peer_world_rank] = this->Data();
-        ipc_ptrs_[peer_world_rank] = this->Data();
+        ipc_remote_ptrs_[peer] = this->Data();
+        ipc_ptrs_[peer] = this->Data();
       } else {
-        void* peer_ptr = nullptr;
-        CUDA_CHECK(cudaIpcOpenMemHandle(&peer_ptr, handles[i], cudaIpcMemLazyEnablePeerAccess));
-        ipc_remote_ptrs_[peer_world_rank] = peer_ptr;
-        ipc_ptrs_[peer_world_rank] = peer_ptr;
+        void* ptr = nullptr;
+        CUDA_CHECK(cudaIpcOpenMemHandle(&ptr, handles[i], cudaIpcMemLazyEnablePeerAccess));
+        ipc_remote_ptrs_[peer] = ptr;
+        ipc_ptrs_[peer] = ptr;
       }
     }
   }
