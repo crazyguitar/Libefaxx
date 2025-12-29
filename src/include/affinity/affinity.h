@@ -89,10 +89,11 @@ static constexpr uint16_t AMD_VENDOR_ID = 0x1002;
  * Reference: libfabric fabtests/common/hmem_cuda.c
  */
 struct CUDAMemorySupport {
-  bool dmabuf = false;  ///< DMA-BUF supported
-  bool gdr = false;     ///< GPUDirect RDMA supported
-  int cc_major = 0;     ///< Compute capability major
-  int cc_minor = 0;     ///< Compute capability minor
+  bool dmabuf = false;   ///< DMA-BUF supported
+  bool gdr = false;      ///< GPUDirect RDMA supported
+  int cc_major = 0;      ///< Compute capability major
+  int cc_minor = 0;      ///< Compute capability minor
+  size_t nvlink_bw = 0;  ///< NVLink bandwidth in bytes/sec (0 if no NVLink)
 
   /**
    * @brief Detect memory support for a specific CUDA device
@@ -116,6 +117,25 @@ struct CUDAMemorySupport {
     cudaGetLastError();  // Clear any errors from unsupported attributes
     support.dmabuf = (dmabuf_attr == 1);
     support.gdr = (support.cc_major < 10) && (gdr_attr == 1);  // Blackwell deprecates nv-p2p
+
+    // Query NVLink bandwidth via NVML field values API (NVML_FI_DEV_NVLINK_GET_SPEED)
+    // Note: Returns raw link speed including protocol overhead, not effective data bandwidth.
+    // E.g., H100 reports ~26.56 GB/s/link (478 GB/s total) vs 25 GB/s effective (450 GB/s).
+    nvmlDevice_t nvml_dev;
+    if (nvmlDeviceGetHandleByIndex(device, &nvml_dev) == NVML_SUCCESS) {
+      nvmlFieldValue_t values[NVML_NVLINK_MAX_LINKS];
+      for (unsigned i = 0; i < NVML_NVLINK_MAX_LINKS; ++i) {
+        values[i].fieldId = NVML_FI_DEV_NVLINK_GET_SPEED;
+        values[i].scopeId = i;  // link ID
+      }
+      nvmlDeviceGetFieldValues(nvml_dev, NVML_NVLINK_MAX_LINKS, values);
+      size_t total_bw = 0;
+      for (unsigned i = 0; i < NVML_NVLINK_MAX_LINKS; ++i) {
+        if (values[i].nvmlReturn == NVML_SUCCESS) total_bw += values[i].value.uiVal;
+      }
+      support.nvlink_bw = total_bw * 1000000ULL;  // MBps to bytes/s
+    }
+
     return support;
   }
 
@@ -347,6 +367,11 @@ inline std::ostream& operator<<(std::ostream& os, const GPUAffinity& affinity) {
   os << fmt::format(
       "  Mem Support:  {} (DMA-BUF={}, GDR={})\n", affinity.mem_support.Status(), affinity.mem_support.dmabuf, affinity.mem_support.gdr
   );
+  if (affinity.mem_support.nvlink_bw > 0) {
+    os << fmt::format("  NVLink BW:    {:.1f} GB/s\n", affinity.mem_support.nvlink_bw / 1e9);
+  } else {
+    os << fmt::format("  NVLink BW:    N/A\n");
+  }
 
   if (affinity.gpu) {
     // Print hwloc PCI address

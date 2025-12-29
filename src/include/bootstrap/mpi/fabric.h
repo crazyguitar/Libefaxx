@@ -91,6 +91,37 @@ class Peer : private NoCopy {
   }
 
   /**
+   * @brief Exchange IPC handles for intra-node communication
+   *
+   * Exchanges CUDA IPC handles among ranks on the same node and opens
+   * remote memory handles for direct GPU-to-GPU access.
+   *
+   * @tparam T SymmetricMemory type (must be DeviceDMABuffer-based)
+   * @param bufs Buffer set to exchange IPC handles for
+   */
+  template <typename T>
+  void HandshakeIPC(Buffers<T>& bufs) {
+    const int local_size = mpi.GetLocalSize();
+    const int local_rank = mpi.GetLocalRank();
+    const int world_rank = mpi.GetWorldRank();
+
+    if (local_size <= 1) return;
+
+    std::vector<cudaIpcMemHandle_t> all_handles(local_size);
+    std::vector<int> local_world_ranks(local_size);
+
+    cudaIpcMemHandle_t local_handle;
+    CUDA_CHECK(cudaIpcGetMemHandle(&local_handle, bufs[world_rank]->Data()));
+
+    MPI_Comm local = mpi.GetLocalComm();
+    size_t hsz = sizeof(cudaIpcMemHandle_t);
+    MPI_Allgather(&world_rank, 1, MPI_INT, local_world_ranks.data(), 1, MPI_INT, local);
+    MPI_Allgather(&local_handle, hsz, MPI_BYTE, all_handles.data(), hsz, MPI_BYTE, local);
+
+    bufs[world_rank]->OpenIPCHandles(all_handles, local_world_ranks, local_rank);
+  }
+
+  /**
    * @brief Exchange RMA keys for a single buffer set (symmetric pattern)
    *
    * Each buffer exchanges its own RMA info with the corresponding peer buffer.
