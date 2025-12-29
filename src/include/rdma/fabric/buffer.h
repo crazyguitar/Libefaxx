@@ -15,6 +15,7 @@
 #include <array>
 #include <device/common.cuh>
 #include <limits>
+#include <unordered_map>
 #include <vector>
 
 /**

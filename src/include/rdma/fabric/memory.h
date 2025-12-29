@@ -42,11 +42,29 @@ class SymmetricMemory : public BufferType {
       CUDA_CHECK(cudaMallocManaged(&completed_, sizeof(uint64_t)));
       *posted_ = 0;
       *completed_ = 0;
+
+      // Initialize IPC arrays for DeviceDMABuffer
+      if constexpr (std::is_same_v<BufferType, DeviceDMABuffer>) {
+        CUDA_CHECK(cudaMallocManaged(&ipc_ptrs_, world_size_ * sizeof(void*)));
+        for (int i = 0; i < world_size_; ++i) {
+          ipc_ptrs_[i] = nullptr;
+        }
+      }
     }
   }
 
   ~SymmetricMemory() {
     if constexpr (!std::is_same_v<BufferType, HostBuffer>) {
+      // Cleanup IPC handles for DeviceDMABuffer
+      if constexpr (std::is_same_v<BufferType, DeviceDMABuffer>) {
+        for (auto& [rank, ptr] : ipc_remote_ptrs_) {
+          if (ptr != this->Data()) {
+            CUDA_CHECK(cudaIpcCloseMemHandle(ptr));
+          }
+        }
+        if (ipc_ptrs_) cudaFree(ipc_ptrs_);
+      }
+
       if (posted_) cudaFree(posted_);
       if (completed_) cudaFree(completed_);
     }
@@ -192,10 +210,34 @@ class SymmetricMemory : public BufferType {
   [[nodiscard]] uint64_t* GetCompleted() noexcept { return completed_; }
 
   /** @brief Get device context for CUDA kernel access */
-  [[nodiscard]] DeviceContext GetContext() noexcept { return {&queue_, posted_, completed_}; }
+  [[nodiscard]] DeviceContext GetContext() noexcept {
+    if constexpr (std::is_same_v<BufferType, DeviceDMABuffer>) {
+      return {&queue_, posted_, completed_, ipc_ptrs_};
+    } else {
+      return {&queue_, posted_, completed_, nullptr};
+    }
+  }
 
   /** @brief Increment completed counter (called by CPU after RDMA completion) */
   void Complete() noexcept { reinterpret_cast<cuda::std::atomic<uint64_t>*>(completed_)->fetch_add(1, cuda::std::memory_order_relaxed); }
+
+  /** @brief Open IPC handles from peer ranks */
+  template <typename T = BufferType>
+  typename std::enable_if_t<std::is_same_v<T, DeviceDMABuffer>, void>
+  OpenIPCHandles(const std::vector<cudaIpcMemHandle_t>& handles, const std::vector<int>& world_ranks, int local_rank) {
+    for (size_t i = 0; i < handles.size(); ++i) {
+      int peer_world_rank = world_ranks[i];
+      if (static_cast<int>(i) == local_rank) {
+        ipc_remote_ptrs_[peer_world_rank] = this->Data();
+        ipc_ptrs_[peer_world_rank] = this->Data();
+      } else {
+        void* peer_ptr = nullptr;
+        CUDA_CHECK(cudaIpcOpenMemHandle(&peer_ptr, handles[i], cudaIpcMemLazyEnablePeerAccess));
+        ipc_remote_ptrs_[peer_world_rank] = peer_ptr;
+        ipc_ptrs_[peer_world_rank] = peer_ptr;
+      }
+    }
+  }
 
  private:
   int world_size_;                                 ///< Number of ranks in the world
@@ -203,6 +245,10 @@ class SymmetricMemory : public BufferType {
   Queue<DeviceRequest> queue_;                     ///< GPU request queue
   uint64_t* posted_ = nullptr;                     ///< Posted operations counter (managed memory)
   uint64_t* completed_ = nullptr;                  ///< Completed operations counter (managed memory)
+
+  // IPC members (only used for DeviceDMABuffer)
+  std::unordered_map<int, void*> ipc_remote_ptrs_;  ///< Map of rank to remote GPU pointers
+  void** ipc_ptrs_ = nullptr;                       ///< Device array of IPC pointers indexed by rank
 };
 
 /** @brief Symmetric memory with DMABUF for GPU direct access */

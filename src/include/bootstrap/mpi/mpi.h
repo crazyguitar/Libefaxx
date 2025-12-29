@@ -37,6 +37,8 @@ class MPI {
   [[nodiscard]] inline int GetNodeIndex() const noexcept { return node_; };
   /** @brief Get processor name string */
   [[nodiscard]] const char* GetProcessName() const noexcept { return processor_name_; }
+  /** @brief Get local node communicator for intra-node operations */
+  [[nodiscard]] inline MPI_Comm GetLocalComm() const noexcept { return local_comm_; }
 
  private:
   MPI() {
