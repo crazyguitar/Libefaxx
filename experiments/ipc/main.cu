@@ -9,7 +9,7 @@
  *
  * Configuration Performance (at 1GB):
  * - 1×256 threads:   ~350 GB/s (9.2% peak BW) - insufficient parallelism
- * - 1×1024 threads:  ~353 GB/s (9.2% peak BW) - marginal improvement  
+ * - 1×1024 threads:  ~353 GB/s (9.2% peak BW) - marginal improvement
  * - 16×256 threads:  ~1868 GB/s (48.8% peak BW) - better SM utilization
  * - 128×256 threads: ~2971 GB/s (77.7% peak BW) - near-optimal parallelism
  *
