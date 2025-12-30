@@ -65,24 +65,7 @@ inline void shmem_finalize() {
   auto mem = std::make_unique<SymmetricDMAMemory>(peer.channels[target], size, world, peer.device);
 
   // Exchange IPC handles among local ranks
-  const int local_size = peer.mpi.GetLocalSize();
-  const int local_rank = peer.mpi.GetLocalRank();
-  const int world_rank = peer.mpi.GetWorldRank();
-
-  if (local_size > 1) {
-    std::vector<cudaIpcMemHandle_t> all_handles(local_size);
-    std::vector<int> local_world_ranks(local_size);
-
-    cudaIpcMemHandle_t local_handle;
-    CUDA_CHECK(cudaIpcGetMemHandle(&local_handle, mem->Data()));
-
-    MPI_Comm local = peer.mpi.GetLocalComm();
-    size_t hsz = sizeof(cudaIpcMemHandle_t);
-    MPI_Allgather(&world_rank, 1, MPI_INT, local_world_ranks.data(), 1, MPI_INT, local);
-    MPI_Allgather(&local_handle, hsz, MPI_BYTE, all_handles.data(), hsz, MPI_BYTE, local);
-
-    mem->OpenIPCHandles(all_handles, local_world_ranks, local_rank);
-  }
+  peer.Handshake(mem);
 
   // Exchange RDMA keys (always do this for ring pattern)
   auto local_rma = mem->GetLocalRmaIovs();

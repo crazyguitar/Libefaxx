@@ -42,16 +42,7 @@ struct TestConfig {
 
     int next = (rank + 1) % world;
     auto mem = std::make_unique<BufType>(peer.channels[next], size, world, peer.device);
-
-    std::vector<cudaIpcMemHandle_t> all_handles(local_size);
-    std::vector<int> local_world_ranks(local_size);
-    cudaIpcMemHandle_t local_handle;
-    CUDA_CHECK(cudaIpcGetMemHandle(&local_handle, mem->Data()));
-
-    MPI_Comm local = peer.mpi.GetLocalComm();
-    MPI_Allgather(&rank, 1, MPI_INT, local_world_ranks.data(), 1, MPI_INT, local);
-    MPI_Allgather(&local_handle, sizeof(cudaIpcMemHandle_t), MPI_BYTE, all_handles.data(), sizeof(cudaIpcMemHandle_t), MPI_BYTE, local);
-    mem->OpenIPCHandles(all_handles, local_world_ranks, local_rank);
+    auto local_world_ranks = peer.Handshake(mem);
 
     auto ctx = mem->GetContext();
     size_t len = size / sizeof(int);

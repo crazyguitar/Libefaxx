@@ -100,7 +100,7 @@ class Peer : private NoCopy {
    * @param bufs Buffer set to exchange IPC handles for
    */
   template <typename T>
-  void HandshakeIPC(Buffers<T>& bufs) {
+  void Handshake(Buffers<T>& bufs, std::true_type /* ipc */) {
     const int local_size = mpi.GetLocalSize();
     const int local_rank = mpi.GetLocalRank();
     const int world_rank = mpi.GetWorldRank();
@@ -119,6 +119,39 @@ class Peer : private NoCopy {
     MPI_Allgather(&local_handle, hsz, MPI_BYTE, all_handles.data(), hsz, MPI_BYTE, local);
 
     bufs[world_rank]->OpenIPCHandles(all_handles, local_world_ranks, local_rank);
+  }
+
+  /**
+   * @brief Exchange IPC handles for a single buffer (intra-node)
+   *
+   * @tparam T Buffer type (must have Data() and OpenIPCHandles)
+   * @param buf Single buffer to exchange IPC handles for
+   * @return Vector mapping local rank index to world rank
+   */
+  template <typename T>
+  std::vector<int> Handshake(std::unique_ptr<T>& buf) {
+    const int local_size = mpi.GetLocalSize();
+    const int local_rank = mpi.GetLocalRank();
+    const int world_rank = mpi.GetWorldRank();
+
+    std::vector<int> local_world_ranks(local_size);
+    if (local_size <= 1) {
+      local_world_ranks[0] = world_rank;
+      return local_world_ranks;
+    }
+
+    std::vector<cudaIpcMemHandle_t> all_handles(local_size);
+
+    cudaIpcMemHandle_t local_handle;
+    CUDA_CHECK(cudaIpcGetMemHandle(&local_handle, buf->Data()));
+
+    MPI_Comm local = mpi.GetLocalComm();
+    size_t hsz = sizeof(cudaIpcMemHandle_t);
+    MPI_Allgather(&world_rank, 1, MPI_INT, local_world_ranks.data(), 1, MPI_INT, local);
+    MPI_Allgather(&local_handle, hsz, MPI_BYTE, all_handles.data(), hsz, MPI_BYTE, local);
+
+    buf->OpenIPCHandles(all_handles, local_world_ranks, local_rank);
+    return local_world_ranks;
   }
 
   /**
