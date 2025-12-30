@@ -82,6 +82,18 @@ struct TestConfig {
       MPI_Barrier(MPI_COMM_WORLD);
       auto end = std::chrono::high_resolution_clock::now();
 
+      // GPU-side verification: target rank checks received data
+      if (rank == target_rank) {
+        int* result;
+        CUDA_CHECK(cudaMallocManaged(&result, sizeof(int)));
+        *result = 1;
+        LAUNCH_KERNEL(&cfg, IPCVerifyKernel, static_cast<int*>(mem->Data()), target_rank, len, result);
+        CUDA_CHECK(cudaStreamSynchronize(peer.stream));
+        bool ok = (*result == 1);
+        CUDA_CHECK(cudaFree(result));
+        if (!ok) throw std::runtime_error("IPC verification failed");
+      }
+
       double elapsed_us = std::chrono::duration<double, std::micro>(end - start).count();
       double avg_us = elapsed_us / opts.repeat;
       double bw_gbps = (size * 8.0) / (avg_us * 1000.0);

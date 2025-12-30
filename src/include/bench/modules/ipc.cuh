@@ -6,6 +6,18 @@
 
 #include <bench/mpi/fabric.cuh>
 
+/** @brief IPC verify kernel - check data on GPU */
+__global__ void IPCVerifyKernel(const int* __restrict__ data, int expected, size_t len, int* __restrict__ result) {
+  size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
+  size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  for (size_t idx = tid; idx < len; idx += stride) {
+    if (data[idx] != expected + static_cast<int>(idx)) {
+      atomicExch(result, 0);
+      return;
+    }
+  }
+}
+
 /** @brief IPC write kernel - direct write to remote GPU memory */
 __global__ void IPCWriteKernel(void* const* __restrict__ ipc_ptrs, int target, size_t len, int iters) {
   int* remote = static_cast<int*>(ipc_ptrs[target]);
