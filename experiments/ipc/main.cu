@@ -21,90 +21,53 @@
  */
 #include <affinity/affinity.h>
 #include <bench/arguments.h>
-#include <io/progress.h>
 
 #include <bench/modules/ipc.cuh>
 #include <bench/mpi/fabric.cuh>
 
 /**
- * @brief IPC benchmark with configurable parallelism
- * @tparam BufType Buffer type (SymmetricDMAMemory)
+ * @brief IPC benchmark test with configurable grid/block dimensions
  * @tparam NumBlocks Number of thread blocks (grid dimension)
  * @tparam NumThreads Number of threads per block
  */
-template <typename BufType, unsigned int NumBlocks, unsigned int NumThreads>
-struct TestConfig {
-  static BenchResult Run(size_t size, const Options& opts, FabricBench& peer, std::string_view name = "IPCWrite") {
+template <unsigned int NumBlocks, unsigned int NumThreads>
+struct Test {
+  static BenchResult Run(size_t size, const Options& opts, FabricBench& peer, std::string_view name) {
     int rank = peer.mpi.GetWorldRank();
-    int world = peer.mpi.GetWorldSize();
     int local_size = peer.mpi.GetLocalSize();
-    int local_rank = peer.mpi.GetLocalRank();
 
-    int next = (rank + 1) % world;
-    auto mem = std::make_unique<BufType>(peer.channels[next], size, world, peer.device);
-    auto local_world_ranks = peer.Handshake(mem);
-
-    auto ctx = mem->GetContext();
-    size_t len = size / sizeof(int);
+    // Allocate IPC buffer and exchange handles with local ranks
+    auto bufs = peer.AllocIPC<SymmetricDMAMemory>(size);
+    auto local_world_ranks = peer.Handshake(bufs, std::true_type{});
 
     auto& affinity = GPUloc::Get().GetGPUAffinity()[peer.device];
-    size_t ipc_bw_bps = affinity.mem_support.nvlink_bw * 8;
+    size_t ipc_bw = affinity.mem_support.nvlink_bw * 8;
 
-    cudaLaunchConfig_t cfg{.gridDim = {NumBlocks, 1, 1}, .blockDim = {NumThreads, 1, 1}, .stream = peer.stream};
-
+    // Benchmark rank 0 writing to each local peer via IPC
     double sum_bw = 0, sum_time = 0;
     for (int t = 1; t < local_size; ++t) {
-      int target_rank = local_world_ranks[t];
-      Progress progress(opts.repeat, ipc_bw_bps, name);
-      MPI_Barrier(MPI_COMM_WORLD);
-      auto start = std::chrono::high_resolution_clock::now();
+      int target = local_world_ranks[t];
+      using Write = IPCWrite<FabricBench, NumBlocks, NumThreads>;
+      using Verify = IPCVerify<FabricBench, NumBlocks, NumThreads>;
 
-      if (rank == 0) {
-        for (int i = 0; i < opts.repeat; ++i) {
-          LAUNCH_KERNEL(&cfg, IPCWriteKernel, ctx.ipc_ptrs, target_rank, len, 1);
-          if ((i + 1) % Progress::kPrintFreq == 0) {
-            CUDA_CHECK(cudaStreamSynchronize(peer.stream));
-            progress.Print(std::chrono::high_resolution_clock::now(), size, i + 1);
-          }
-        }
-        CUDA_CHECK(cudaStreamSynchronize(peer.stream));
-      }
-
-      MPI_Barrier(MPI_COMM_WORLD);
-      auto end = std::chrono::high_resolution_clock::now();
-
-      // GPU-side verification: target rank checks received data
-      if (rank == target_rank) {
-        int* result;
-        CUDA_CHECK(cudaMallocManaged(&result, sizeof(int)));
-        *result = 1;
-        LAUNCH_KERNEL(&cfg, IPCVerifyKernel, static_cast<int*>(mem->Data()), target_rank, len, result);
-        CUDA_CHECK(cudaStreamSynchronize(peer.stream));
-        bool ok = (*result == 1);
-        CUDA_CHECK(cudaFree(result));
-        if (!ok) throw std::runtime_error("IPC verification failed");
-      }
-
-      double elapsed_us = std::chrono::duration<double, std::micro>(end - start).count();
-      double avg_us = elapsed_us / opts.repeat;
-      double bw_gbps = (size * 8.0) / (avg_us * 1000.0);
-      sum_bw += bw_gbps;
-      sum_time += avg_us;
+      peer.Warmup(bufs, bufs, Write{target}, Verify{target}, opts.warmup);
+      auto r = peer.Bench(name, bufs, bufs, Write{target}, Verify{target}, opts.repeat, 0, ipc_bw);
+      sum_bw += r.bw_gbps;
+      sum_time += r.time_us;
     }
 
     int npairs = local_size - 1;
     double avg_bw = sum_bw / npairs;
-    double link_bw = ipc_bw_bps / 1e9;
-    double bus_bw = (link_bw > 0) ? (avg_bw / link_bw) * 100.0 : 0;
-    return {size, sum_time / npairs, avg_bw, bus_bw};
+    double link_bw = ipc_bw / 1e9;
+    return {size, sum_time / npairs, avg_bw, (link_bw > 0) ? (avg_bw / link_bw) * 100.0 : 0};
   }
 };
 
 // Test configurations demonstrating parallelism impact on NVLink utilization
-using Test1x256 = TestConfig<SymmetricDMAMemory, 1, 256>;      // Low parallelism baseline
-using Test1x1024 = TestConfig<SymmetricDMAMemory, 1, 1024>;    // Single block, max threads
-using Test16x256 = TestConfig<SymmetricDMAMemory, 16, 256>;    // Multi-block, moderate
-using Test128x256 = TestConfig<SymmetricDMAMemory, 128, 256>;  // High parallelism
+using Test1x256 = Test<1, 256>;    // Low parallelism baseline
+using Test1x1024 = Test<1, 1024>;  // Single block, max threads
+using Test16x256 = Test<16, 256>;  // Multi-block, moderate
+using Test128x256 = Test<128, 256>;
 
 int main(int argc, char* argv[]) {
   auto opts = parse_args(argc, argv);

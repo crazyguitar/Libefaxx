@@ -98,17 +98,21 @@ class Peer : private NoCopy {
    *
    * @tparam T SymmetricMemory type (must be DeviceDMABuffer-based)
    * @param bufs Buffer set to exchange IPC handles for
+   * @return Vector mapping local rank index to world rank
    */
   template <typename T>
-  void Handshake(Buffers<T>& bufs, std::true_type /* ipc */) {
+  std::vector<int> Handshake(Buffers<T>& bufs, std::true_type /* ipc */) {
     const int local_size = mpi.GetLocalSize();
     const int local_rank = mpi.GetLocalRank();
     const int world_rank = mpi.GetWorldRank();
 
-    if (local_size <= 1) return;
+    std::vector<int> local_world_ranks(local_size);
+    if (local_size <= 1) {
+      local_world_ranks[0] = world_rank;
+      return local_world_ranks;
+    }
 
     std::vector<cudaIpcMemHandle_t> all_handles(local_size);
-    std::vector<int> local_world_ranks(local_size);
 
     cudaIpcMemHandle_t local_handle;
     CUDA_CHECK(cudaIpcGetMemHandle(&local_handle, bufs[world_rank]->Data()));
@@ -119,6 +123,7 @@ class Peer : private NoCopy {
     MPI_Allgather(&local_handle, hsz, MPI_BYTE, all_handles.data(), hsz, MPI_BYTE, local);
 
     bufs[world_rank]->OpenIPCHandles(all_handles, local_world_ranks, local_rank);
+    return local_world_ranks;
   }
 
   /**

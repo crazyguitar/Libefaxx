@@ -45,23 +45,22 @@ __global__ void IPCReadKernel(void* const* __restrict__ ipc_ptrs, int source, si
 }
 
 /**
- * @brief IPC Write benchmark functor
+ * @brief IPC Write benchmark functor with configurable parallelism
  */
-template <typename Peer>
+template <typename Peer, unsigned int NumBlocks = 1, unsigned int NumThreads = 256>
 struct IPCWrite {
-  int iters, target;
+  int target;
 
   template <typename T>
-  void operator()(Peer& peer, typename Peer::template Buffers<T>& a, typename Peer::template Buffers<T>& b) {
+  void operator()(Peer& peer, typename Peer::template Buffers<T>& a, typename Peer::template Buffers<T>&) {
     int rank = peer.mpi.GetWorldRank();
     if (rank != 0) return;
 
-    auto& mem = *a[rank];
-    auto ctx = mem.GetContext();
-    size_t len = mem.Size() / sizeof(int);
+    auto ctx = a[rank]->GetContext();
+    size_t len = a[rank]->Size() / sizeof(int);
 
-    cudaLaunchConfig_t cfg{.gridDim = {1, 1, 1}, .blockDim = {256, 1, 1}, .stream = peer.stream};
-    LAUNCH_KERNEL(&cfg, IPCWriteKernel, ctx.ipc_ptrs, target, len, iters);
+    cudaLaunchConfig_t cfg{.gridDim = {NumBlocks, 1, 1}, .blockDim = {NumThreads, 1, 1}, .stream = peer.stream};
+    LAUNCH_KERNEL(&cfg, IPCWriteKernel, ctx.ipc_ptrs, target, len, 1);
     CUDA_CHECK(cudaStreamSynchronize(peer.stream));
   }
 };
@@ -89,20 +88,28 @@ struct IPCRead {
 };
 
 /**
- * @brief IPC Verify functor - verifies data on receiver side
+ * @brief IPC Verify functor with configurable parallelism (GPU-side verification)
  */
+template <typename Peer, unsigned int NumBlocks = 1, unsigned int NumThreads = 256>
 struct IPCVerify {
   int target;
 
-  template <typename P, typename Buffers>
-  void operator()(P& peer, Buffers& b) const {
+  template <typename T>
+  void operator()(Peer& peer, typename Peer::template Buffers<T>& bufs) {
     int rank = peer.mpi.GetWorldRank();
     if (rank != target) return;
 
-    auto& mem = *b[rank];
-    size_t num_ints = mem.Size() / sizeof(int);
-    std::vector<int> host_buf(num_ints);
-    CUDA_CHECK(cudaMemcpy(host_buf.data(), mem.Data(), mem.Size(), cudaMemcpyDeviceToHost));
-    if (VerifyBufferData(host_buf, rank, rank, 0) > 0) throw std::runtime_error("IPC verification failed");
+    auto* data = static_cast<int*>(bufs[rank]->Data());
+    size_t len = bufs[rank]->Size() / sizeof(int);
+
+    int* result;
+    CUDA_CHECK(cudaMallocManaged(&result, sizeof(int)));
+    *result = 1;
+    cudaLaunchConfig_t cfg{.gridDim = {NumBlocks, 1, 1}, .blockDim = {NumThreads, 1, 1}, .stream = peer.stream};
+    LAUNCH_KERNEL(&cfg, IPCVerifyKernel, data, target, len, result);
+    CUDA_CHECK(cudaStreamSynchronize(peer.stream));
+    bool ok = (*result == 1);
+    CUDA_CHECK(cudaFree(result));
+    if (!ok) throw std::runtime_error("IPC verification failed");
   }
 };

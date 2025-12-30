@@ -222,6 +222,30 @@ class FabricBench : public Peer {
   }
 
   /**
+   * @brief Allocate buffer for IPC (intra-node) communication
+   *
+   * Unlike Alloc() which creates buffers for each peer, this allocates a single
+   * buffer at bufs[rank] that will be shared via CUDA IPC with local ranks.
+   * Use with Handshake(bufs, std::true_type{}) to exchange IPC handles.
+   *
+   * @tparam T Buffer type (typically SymmetricDMAMemory)
+   * @param size Buffer size in bytes
+   * @param init_value Initial value for buffer (-1 uses rank as value)
+   * @return Vector with buffer only at bufs[rank], others are nullptr
+   */
+  template <typename T>
+  Buffers<T> AllocIPC(size_t size, int init_value = 0) {
+    const auto world_size = mpi.GetWorldSize();
+    const auto rank = mpi.GetWorldRank();
+    Buffers<T> buffers(world_size);
+    buffers[rank] = MakeBuffer<T>(channels[rank], device, size, world_size);
+    const size_t num_ints = size / sizeof(int);
+    int value = (init_value == -1) ? rank : init_value;
+    InitBuffer(buffers[rank].get(), num_ints, value, stream);
+    return buffers;
+  }
+
+  /**
    * @brief Allocate send/recv buffer pair
    * @param size Buffer size in bytes
    * @return Pair of (send buffers initialized with rank, recv buffers initialized with 0)
@@ -262,7 +286,11 @@ class FabricBench : public Peer {
   BenchResult
   Bench(std::string_view name, Buffers<T>& a, Buffers<T>& b, F&& func, V&& verify, int iters, size_t progress_bytes = 0, size_t progress_bw = 0) {
     const auto rank = mpi.GetWorldRank();
-    const size_t buf_size = a[rank == 0 ? 1 : 0]->Size();
+    const auto world_size = mpi.GetWorldSize();
+    size_t buf_size = 0;
+    for (int i = 0; i < world_size && buf_size == 0; ++i) {
+      if (a[i]) buf_size = a[i]->Size();
+    }
     const size_t bytes = progress_bytes > 0 ? progress_bytes : buf_size;
     const size_t bw = progress_bw > 0 ? progress_bw : GetBandwidth(0);
     Progress progress(iters, bw, name);
