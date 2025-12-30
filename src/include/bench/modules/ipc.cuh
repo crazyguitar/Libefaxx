@@ -31,19 +31,6 @@ __global__ void IPCWriteKernel(void* const* __restrict__ ipc_ptrs, int target, s
   }
 }
 
-/** @brief IPC read kernel - direct read from remote GPU memory */
-__global__ void IPCReadKernel(void* const* __restrict__ ipc_ptrs, int source, size_t len, int* __restrict__ local, int iters) {
-  int* remote = static_cast<int*>(ipc_ptrs[source]);
-  size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
-  size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  for (int iter = 0; iter < iters; ++iter) {
-    for (size_t idx = tid; idx < len; idx += stride) {
-      local[idx] = remote[idx];
-    }
-    __threadfence_system();
-  }
-}
-
 /**
  * @brief IPC Write benchmark functor with configurable parallelism
  */
@@ -61,28 +48,6 @@ struct IPCWrite {
 
     cudaLaunchConfig_t cfg{.gridDim = {NumBlocks, 1, 1}, .blockDim = {NumThreads, 1, 1}, .stream = peer.stream};
     LAUNCH_KERNEL(&cfg, IPCWriteKernel, ctx.ipc_ptrs, target, len, 1);
-    CUDA_CHECK(cudaStreamSynchronize(peer.stream));
-  }
-};
-
-/**
- * @brief IPC Read benchmark functor
- */
-template <typename Peer>
-struct IPCRead {
-  int iters, source;
-
-  template <typename T>
-  void operator()(Peer& peer, typename Peer::template Buffers<T>& a, typename Peer::template Buffers<T>& b) {
-    int rank = peer.mpi.GetWorldRank();
-    if (rank != 0) return;
-
-    auto& mem = *a[rank];
-    auto ctx = mem.GetContext();
-    size_t len = mem.Size() / sizeof(int);
-
-    cudaLaunchConfig_t cfg{.gridDim = {1, 1, 1}, .blockDim = {256, 1, 1}, .stream = peer.stream};
-    LAUNCH_KERNEL(&cfg, IPCReadKernel, ctx.ipc_ptrs, source, len, static_cast<int*>(mem.Data()), iters);
     CUDA_CHECK(cudaStreamSynchronize(peer.stream));
   }
 };
