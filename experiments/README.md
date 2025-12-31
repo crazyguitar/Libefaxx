@@ -140,7 +140,7 @@ second and third plots confirm that pairing each GPU-initiated operation with
 `quiet` reduces performance by over 20% for large transfers and over 40% for
 small writes (8MiB). Minimizing `quiet` call frequency allows performance to
 match baseline levels (SingleDMA and MultiDMA) for large writes exceeding 64MiB.
-The benchmark source code is available [here](https://github.com/crazyguitar/Libefaxx/blob/main/src/include/bench/modules/gin.cuh).
+The benchmark source code is available [here](https://github.com/crazyguitar/Libefaxx/blob/main/src/include/bench/modules/proxy.cuh).
 
 ![proxy](imgs/proxy.png)
 
