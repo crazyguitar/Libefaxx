@@ -51,6 +51,19 @@ pinned host memory with four EFAs, performance degrades and is worse than
 the single-EFA configuration, indicating that pinned memory does not scale
 efficiently for this Alltoall workload in this setup.
 
+The second figure examines the relationship between Alltoall bandwidth and nodes
+size. As the number of nodes doubles, the observed bandwidth decreases by
+approximately 2×, which is expected since each process must exchange data with a
+larger number of peers during each Alltoall operation.
+
+In addition, results from Figures 3 and 4 show that using pinned host memory does
+not yield performance improvements when scaling to all EFAs per GPU. In contrast,
+device memory (DMA buffers) scales effectively: by partitioning the buffer into
+four chunks and distributing them across four EFAs, the benchmark achieves nearly
+4× higher performance compared to a single-EFA configuration.
+
+![all2all](imgs/all2all.png)
+
 ```
  SingleDMA / SinglePin                    |    MultiDMA / MultiPin
  (Single EFA Channel)                     |    (Split Across All EFAs)
@@ -64,19 +77,6 @@ efficiently for this Alltoall workload in this setup.
                                           |    - ~380 Gbps aggregate (4× scaling)
                                           |    - Requires buffer partitioning
 ```
-
-The second figure examines the relationship between Alltoall bandwidth and nodes
-size. As the number of nodes doubles, the observed bandwidth decreases by
-approximately 2×, which is expected since each process must exchange data with a
-larger number of peers during each Alltoall operation.
-
-In addition, results from Figures 3 and 4 show that using pinned host memory does
-not yield performance improvements when scaling to all EFAs per GPU. In contrast,
-device memory (DMA buffers) scales effectively: by partitioning the buffer into
-four chunks and distributing them across four EFAs, the benchmark achieves nearly
-4× higher performance compared to a single-EFA configuration.
-
-![all2all](imgs/all2all.png)
 
 ## Multi-EFA Data Distribution: Round-Robin vs Split Strategies
 
