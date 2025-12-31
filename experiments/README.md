@@ -163,17 +163,26 @@ The benchmark source code is available [here](https://github.com/crazyguitar/Lib
 ## NVLink GPU-to-GPU Communication Performance
 
 NVLink enables direct GPU-to-GPU data transfers with up to **3600 Gbps** theoretical
-bandwidth, bypassing the CPU entirely. Our benchmarks ([IPC](ipc)) reveal that NVLink
-throughput is highly dependent on CUDA kernel parallelism. Specifically, increasing
-the grid dimension significantly improves bandwidth, while block dimension has minimal
-impact on performance. Unlike EFA, where small messages underperform, NVLink bandwidth
-remains stable across message sizes.
+bandwidth, bypassing the CPU entirely. Using CUDA IPC (Inter-Process Communication),
+a process can export device memory via `cudaIpcGetMemHandle` and share it with another
+process, which imports it using `cudaIpcOpenMemHandle`. Once mapped, remote GPU memory
+can be accessed directly from CUDA kernels, enabling efficient cross-GPU writes over
+NVLink.
+
+Our benchmarks ([IPC](ipc)) reveal that NVLink throughput is highly dependent on CUDA
+kernel parallelism. Specifically, increasing the grid dimension significantly improves
+bandwidth, while block dimension has minimal impact on performance. Unlike EFA, where
+small messages underperform, NVLink bandwidth remains stable across message sizes.
 
 ```
  NVLink IPC Write (GPU-to-GPU Direct Memory Access)
 
-   GPU 0 (Writer)                         GPU 1 (Target)
+   Process A (GPU 0)                      Process B (GPU 1)
   ┌─────────────────┐                    ┌─────────────────┐
+  │ cudaIpcGetMemHandle()                │ cudaIpcOpenMemHandle()
+  │        │        |                    │        │        │
+  │        └──── IPC Handle ─────────────│────────┘        │
+  │                 |                    │                 │
   │  CUDA Kernel    │                    │  Remote Memory  │
   │  <<<grid,block>>│                    │                 │
   │                 │      NVLink        │                 │
