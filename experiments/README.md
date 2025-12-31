@@ -43,7 +43,7 @@ corresponding to **~95%** of the available bus bandwidth.
                                           |   - ~380 Gbps aggregate (4 EFAs)
 ```
 
-The following figures present results from a simple [Alltoall](experiments/all2all)
+The following figures present results from a simple [Alltoall](all2all)
 collective communication benchmark over EFA per GPU. In the first experiment,
 which uses 8 nodes, the results show that device memory (DMA buffers) scales
 effectively with the number of EFAs: leveraging four EFAs achieves approximately
