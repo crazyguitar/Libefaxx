@@ -1,4 +1,4 @@
-# Libefaxx (AWS EFA Benchmark for GPU/CPU)
+# AWS EFA Benchmark for GPU/CPU
 
 
 ## Direct libfabric SEND/RECV/WRITE Benchmarks
