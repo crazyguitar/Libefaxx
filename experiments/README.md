@@ -1,8 +1,7 @@
 # Libefaxx (AWS EFA Benchmark for GPU/CPU)
 
-## Evaluation
 
-### Direct libfabric SEND/RECV/WRITE Benchmarks
+## Direct libfabric SEND/RECV/WRITE Benchmarks
 
 The figure below presents representative [SEND\/RECV](sendrecv) benchmark results obtained on
 [Amazon SageMaker HyperPod](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-slurm.html)
@@ -79,7 +78,7 @@ four chunks and distributing them across four EFAs, the benchmark achieves nearl
 
 ![all2all](imgs/all2all.png)
 
-### Multi-EFA Data Distribution: Round-Robin vs Split Strategies
+## Multi-EFA Data Distribution: Round-Robin vs Split Strategies
 
 We evaluated two strategies for distributing data across multiple EFAs: round-robin
 assignment and data splitting. In round-robin mode, each buffer is assigned to a
@@ -113,7 +112,7 @@ to minimize latency.
 
 ![round-robin](imgs/round_robin.png)
 
-### GPU-Initiated via CPU Proxy
+## GPU-Initiated via CPU Proxy
 
 GPU-Initiated Networking (GIN) is becoming essential for accelerating inter-node
 GPU communication. A widely adopted technique uses a CPU proxy thread, as seen
@@ -161,7 +160,7 @@ The benchmark source code is available [here](https://github.com/crazyguitar/Lib
     v           v            v            |
 ```
 
-### NVLink GPU-to-GPU Communication Performance
+## NVLink GPU-to-GPU Communication Performance
 
 NVLink enables direct GPU-to-GPU data transfers with up to **3600 Gbps** theoretical
 bandwidth, bypassing the CPU entirely. Our benchmarks reveal that NVLink throughput
