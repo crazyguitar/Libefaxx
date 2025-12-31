@@ -11,10 +11,11 @@ which demonstrated substantial MoE performance gains by enabling GPU-driven
 communication.
 
 This repository provides a focused benchmarking framework for EFA, designed to
-analyze low-level inter-node communication performances. It complements existing tools
-such as [nccl-tests](https://github.com/NVIDIA/nccl-tests) by enabling direct
-measurement of EFA latency, bandwidth, and GIN behavior, helping engineers and
-researchers optimize distributed training pipelines on AWS.
+analyze low-level inter-node communication performance. It complements existing
+tools such as [nccl-tests](https://github.com/NVIDIA/nccl-tests) by enabling
+direct measurement of EFA latency, bandwidth, and GIN behavior, helping
+engineers and researchers optimize distributed training pipelines on AWS. You
+can find an example of evaluation on p5.48xlarge [here](experiments).
 
 ## Development
 
