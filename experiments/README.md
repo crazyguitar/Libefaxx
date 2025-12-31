@@ -219,7 +219,7 @@ Source code: [proxy.cuh](https://github.com/crazyguitar/Libefaxx/blob/main/src/i
 ## NVLink GPU-to-GPU Communication Performance
 
 NVLink is NVIDIA's high-bandwidth interconnect for direct GPU-to-GPU
-communication, providing up to **3600 Gbps** (450 GB/s) theoretical bandwidth on
+communication, providing up to **3600 Gbps** (450 Gbps) theoretical bandwidth on
 H100 GPUs—approximately 36× faster than PCIe Gen5. NVLink bypasses the CPU
 entirely, enabling peer-to-peer memory access between GPUs within the same node.
 This capability is essential for intra-node communication in tensor parallelism
@@ -242,8 +242,8 @@ NVLink's ability to handle many small transactions efficiently when sufficient
 parallelism is available.
 
 **Benchmark Results ([IPC](ipc)):**
-- 1×256 grid: ~350 GB/s (9% peak) — insufficient parallelism to saturate NVLink
-- 128×256 grid: ~2971 GB/s (78% peak) — near-optimal utilization
+- 1×256 grid: ~350 Gbps (9% peak) — insufficient parallelism to saturate NVLink
+- 128×256 grid: ~2971 Gbps (78% peak) — near-optimal utilization
 
 **Scaling Behavior:** Small and large grid configurations achieve similar
 performance at smaller data sizes where NVLink is not saturated. Throughput
@@ -277,8 +277,8 @@ utilization.
   └─────────────────┘                    └─────────────────┘
 
   Grid Parallelism Impact:
-  - 1×256:   ~350 GB/s  (9% peak)   - insufficient parallelism
-  - 128×256: ~2971 GB/s (78% peak)  - near-optimal utilization
+  - 1×256:   ~350 Gbps  (9% peak)   - insufficient parallelism
+  - 128×256: ~2971 Gbps (78% peak)  - near-optimal utilization
 ```
 
 ![ipc](imgs/ipc.png)
