@@ -4,7 +4,7 @@
 
 ### Direct libfabric SEND/RECV/WRITE Benchmarks
 
-The figure below presents representative [SEND\/RECV](https://github.com/crazyguitar/Libefaxx/tree/main/experiments/sendrecv) benchmark results obtained on
+The figure below presents representative [SEND\/RECV](sendrecv) benchmark results obtained on
 [Amazon SageMaker HyperPod](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-slurm.html)
 using p5.48xlarge instances. The results show that the two-sided round-trip
 communication pattern (where one operation consists of a SEND followed by a RECV)
@@ -13,7 +13,7 @@ RDMA performance using both device memory and host memory, observing that both
 memory types are capable of saturating EFA bandwidth once the message size
 becomes sufficiently large.
 
-In a separate [WRITE](https://github.com/crazyguitar/Libefaxx/tree/main/experiments/write) experiment, we benchmarked one-sided communication (WRITE) over
+In a separate [WRITE](write) experiment, we benchmarked one-sided communication (WRITE) over
 EFA. Using a single communication channel, both pinned host memory (registered via `cudaRegisterHost`)
 and direct device memory access (DMA buffers) achieved bandwidths of approximately **97 Gbps**,
 approaching the theoretical EFA peak bandwidth of **100 Gbps**.
@@ -21,7 +21,7 @@ approaching the theoretical EFA peak bandwidth of **100 Gbps**.
 We also evaluated scalability across multiple EFAs. By partitioning device
 memory across all available EFAs—for example, leveraging four EFAs per GPU on p5
 instance and splitting a 256 MB buffer into 4 chunks (each 64 MB), with each EFA writing a
-portion of the data—we achieved an aggregate bandwidth of approximately [**380 Gbps**](data/p5/write.csv),
+portion of the data—we achieved an aggregate bandwidth of approximately **380 Gbps**,
 corresponding to **~95%** of the available bus bandwidth.
 
 ![bandwidth](imgs/bandwidth.png)
