@@ -163,11 +163,11 @@ The benchmark source code is available [here](https://github.com/crazyguitar/Lib
 ## NVLink GPU-to-GPU Communication Performance
 
 NVLink enables direct GPU-to-GPU data transfers with up to **3600 Gbps** theoretical
-bandwidth, bypassing the CPU entirely. Our benchmarks reveal that NVLink throughput
-is highly dependent on CUDA kernel parallelism. Specifically, increasing the grid
-dimension significantly improves bandwidth, while block dimension has minimal impact
-on performance. Additionally, NVLink bandwidth remains stable across message sizes,
-unlike EFA where small writes underperform compared to large transfers.
+bandwidth, bypassing the CPU entirely. Our benchmarks ([IPC](ipc)) reveal that NVLink
+throughput is highly dependent on CUDA kernel parallelism. Specifically, increasing
+the grid dimension significantly improves bandwidth, while block dimension has minimal
+impact on performance. Unlike EFA, where small messages underperform, NVLink bandwidth
+remains stable across message sizes.
 
 ```
  NVLink IPC Write (GPU-to-GPU Direct Memory Access)
@@ -191,10 +191,11 @@ unlike EFA where small writes underperform compared to large transfers.
   - 128×256: ~2971 GB/s (78% peak)  - near-optimal utilization
 ```
 
-In the following figure, large and small grid configurations show similar performance
-at smaller data sizes because the data volume is insufficient to saturate all NVLink
-connections. Throughput scales with increasing message size until NVLink saturation.
-At 1 GB with 16 grid dimensions, we observed unexpected performance degradation,
-suggesting potential contention when NVLink is fully saturated with large transfers.
+The figure below shows that small and large grid configurations achieve similar
+performance at smaller data sizes, as the data volume is insufficient to saturate
+NVLink. Throughput scales with message size until saturation. At 1 GB with 16 grid
+dimensions, we observed unexpected performance degradation, suggesting potential
+contention under full NVLink saturation. Note that the current implementation achieves
+only ~2971 GB/s (78% peak) due to `cudaStreamSynchronize` calls after each round.
 
 ![ipc](imgs/ipc.png)
