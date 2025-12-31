@@ -3,25 +3,40 @@
 
 ## Direct libfabric SEND/RECV/WRITE Benchmarks
 
-The figure below presents representative [SEND\/RECV](sendrecv) benchmark results obtained on
+Amazon Elastic Fabric Adapter (EFA) provides high-bandwidth, low-latency
+networking for HPC and machine learning workloads on AWS. Understanding raw EFA
+performance characteristics is essential for optimizing distributed training
+pipelines, particularly for large language models (LLMs) where inter-node
+communication often becomes the bottleneck. This section presents EFA bandwidth
+and latency measurements using libfabric [SEND/RECV](sendrecv) and [WRITE](write) operations on
 [Amazon SageMaker HyperPod](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod-slurm.html)
-using p5.48xlarge instances. The results show that the two-sided round-trip
-communication pattern (where one operation consists of a SEND followed by a RECV)
-achieves an effective bandwidth of approximately 48 Gbps. We further evaluated
-RDMA performance using both device memory and host memory, observing that both
-memory types are capable of saturating EFA bandwidth once the message size
-becomes sufficiently large.
+p5.48xlarge instances, which feature 8 NVIDIA H100 GPUs and 32 EFA devices
+(4 EFAs per GPU).
 
-In a separate [WRITE](write) experiment, we benchmarked one-sided communication (WRITE) over
-EFA. Using a single communication channel, both pinned host memory (registered via `cudaRegisterHost`)
-and direct device memory access (DMA buffers) achieved bandwidths of approximately **97 Gbps**,
-approaching the theoretical EFA peak bandwidth of **100 Gbps**.
+**Two-Sided Communication (SEND/RECV):** Two-sided operations require both
+sender and receiver to participate in the transfer, introducing synchronization
+overhead but providing explicit flow control. Our benchmarks show that
+round-trip operations (SEND followed by RECV) achieve approximately **48 Gbps**
+effective bandwidth. Both device memory (DMA buffers) and pinned host memory
+saturate EFA bandwidth at sufficiently large message sizes, indicating that
+memory type does not limit peak throughput for bulk transfers.
 
-We also evaluated scalability across multiple EFAs. By partitioning device
-memory across all available EFAs—for example, leveraging four EFAs per GPU on p5
-instance and splitting a 256 MB buffer into 4 chunks (each 64 MB), with each EFA writing a
-portion of the data—we achieved an aggregate bandwidth of approximately **380 Gbps**,
-corresponding to **~95%** of the available bus bandwidth.
+**One-Sided Communication (WRITE):** One-sided RDMA WRITE operations bypass the
+remote CPU entirely, allowing the initiator to write directly to pre-registered
+remote memory. This eliminates receiver-side overhead and is particularly
+beneficial for latency-sensitive workloads. Single-channel RDMA WRITE operations
+reach approximately **97 Gbps**, approaching the theoretical **100 Gbps** EFA
+peak. Both pinned host memory (`cudaHostRegister`) and device memory achieve
+similar throughput, demonstrating that GPUDirect RDMA effectively eliminates
+CPU-mediated copies.
+
+**Multi-EFA Scaling:** Modern AWS GPU instances provide multiple EFA devices to
+maximize aggregate bandwidth. By partitioning device memory across all available
+EFAs (e.g., splitting a 256 MB buffer into 4 × 64 MB chunks on p5 instances with
+4 EFAs per GPU), we achieve approximately **380 Gbps** aggregate bandwidth,
+corresponding to **~95%** bus utilization. This near-linear scaling demonstrates
+that EFA hardware does not introduce significant contention when properly
+load-balanced.
 
 ![bandwidth](imgs/bandwidth.png)
 
@@ -42,25 +57,38 @@ corresponding to **~95%** of the available bus bandwidth.
                                           |   - ~380 Gbps aggregate (4 EFAs)
 ```
 
-The following figures present results from a simple [Alltoall](all2all)
-collective communication benchmark over EFA per GPU. In the first experiment,
-which uses 8 nodes, the results show that device memory (DMA buffers) scales
-effectively with the number of EFAs: leveraging four EFAs achieves approximately
-4× higher performance compared to using a single EFA. In contrast, when using
-pinned host memory with four EFAs, performance degrades and is worse than
-the single-EFA configuration, indicating that pinned memory does not scale
-efficiently for this Alltoall workload in this setup.
+## All-to-All Collective Communication Benchmark
 
-The second figure examines the relationship between Alltoall bandwidth and nodes
-size. As the number of nodes doubles, the observed bandwidth decreases by
-approximately 2×, which is expected since each process must exchange data with a
-larger number of peers during each Alltoall operation.
+All-to-all communication is a fundamental collective operation where every
+process exchanges data with every other process. This pattern appears frequently
+in distributed deep learning, particularly in expert parallelism (MoE models),
+tensor parallelism, and sequence parallelism where activations must be
+redistributed across devices. The [Alltoall](all2all) benchmark evaluates
+collective communication performance over EFA, measuring how bandwidth scales
+with EFA count and cluster size—critical factors for understanding real-world
+distributed training performance.
 
-In addition, results from Figures 3 and 4 show that using pinned host memory does
-not yield performance improvements when scaling to all EFAs per GPU. In contrast,
-device memory (DMA buffers) scales effectively: by partitioning the buffer into
-four chunks and distributing them across four EFAs, the benchmark achieves nearly
-4× higher performance compared to a single-EFA configuration.
+**EFA Scaling (8 nodes):** Device memory (DMA buffers) scales linearly with EFA
+count—using 4 EFAs achieves approximately **4× throughput** compared to a single
+EFA. This confirms that the EFA hardware and libfabric software stack can
+effectively parallelize transfers across multiple network interfaces. However,
+pinned host memory exhibits degraded performance with multiple EFAs, performing
+worse than single-EFA configurations. This degradation likely stems from
+increased PCIe contention when multiple EFAs compete for host memory bandwidth.
+
+**Node Scaling:** Bandwidth decreases proportionally as node count increases.
+Doubling the number of nodes halves the observed per-node bandwidth, as expected
+since each process must exchange data with a larger number of peers during
+all-to-all operations. This O(N²) communication pattern makes all-to-all
+particularly sensitive to cluster size, highlighting the importance of
+algorithmic optimizations (e.g., hierarchical collectives) for large-scale
+deployments.
+
+**Memory Type Comparison:** Device memory consistently outperforms pinned host
+memory when scaling across multiple EFAs. Partitioning buffers across 4 EFAs
+achieves nearly **4× performance** versus single-EFA configurations. This
+advantage stems from GPUDirect RDMA's ability to transfer data directly between
+GPU memory and the network, avoiding the PCIe round-trip through host memory.
 
 ![all2all](imgs/all2all.png)
 
@@ -80,18 +108,34 @@ four chunks and distributing them across four EFAs, the benchmark achieves nearl
 
 ## Multi-EFA Data Distribution: Round-Robin vs Split Strategies
 
-We evaluated two strategies for distributing data across multiple EFAs: round-robin
-assignment and data splitting. In round-robin mode, each buffer is assigned to a
-different EFA in rotation, allowing independent transfers to overlap. In split mode,
-a single buffer is partitioned across all EFAs, with each EFA transferring a portion
-of the data in parallel.
+When utilizing multiple EFA devices, the data distribution strategy
+significantly impacts both throughput and latency. Choosing the optimal strategy
+depends on the workload characteristics: whether transferring multiple
+independent buffers or a single large buffer. This section compares two
+strategies for distributing data across multiple EFAs: **round-robin
+assignment** and **data splitting**.
 
-Our results show that round-robin achieves higher bandwidth when transferring multiple
-independent buffers, as concurrent transfers can fully overlap. However, for large
-single-buffer transfers (e.g., 1 GB), round-robin provides no latency benefit since
-the entire buffer still traverses a single channel. In contrast, splitting the buffer
-across all EFAs—where each EFA transfers only 256 MB—significantly reduces latency
-by parallelizing the transfer.
+**Round-Robin:** Each buffer is assigned to a different EFA in rotation (buffer
+A → EFA 0, buffer B → EFA 1, etc.), enabling concurrent independent transfers to
+overlap. This approach maximizes aggregate throughput when multiple buffers are
+in flight simultaneously, as each EFA operates independently without
+coordination overhead. Round-robin is optimal for workloads with multiple
+independent buffers targeting different endpoints, such as parameter server
+updates or gradient aggregation across multiple peers.
+
+**Data Splitting:** A single buffer is partitioned across all EFAs, with each
+EFA transferring a portion in parallel (e.g., a 1 GB buffer split into 4 × 256
+MB chunks). This approach minimizes latency for individual large transfers by
+parallelizing the data path, but requires coordination to reassemble the buffer
+at the destination. Data splitting is optimal for large single-buffer transfers
+where minimizing latency is critical, such as broadcasting model weights or
+collecting large activation tensors.
+
+**Key Finding:** Round-robin achieves higher aggregate bandwidth for multiple
+independent buffers due to transfer overlap. However, for large single-buffer
+transfers (e.g., 1 GB), round-robin provides no latency benefit since the entire
+buffer still traverses a single channel. Splitting across EFAs (4 × 256 MB)
+significantly reduces latency by parallelizing the transfer path.
 
 ```
  Round-Robin (per-buffer assignment)      |    Data Splitting (per-chunk assignment)
@@ -106,40 +150,52 @@ by parallelizing the transfer.
   - Best for multiple independent bufs    |    - Best for single large buffer
 ```
 
-**Recommendation**: Use round-robin for workloads with multiple independent buffers
-targeting different endpoints. Use data splitting for single large buffer transfers
-to minimize latency.
+**Recommendation:** Use round-robin for workloads with multiple independent
+buffers targeting different endpoints. Use data splitting for single large
+buffer transfers to minimize latency.
 
 ![round-robin](imgs/round_robin.png)
 
-## GPU-Initiated via CPU Proxy
+## GPU-Initiated Communication via CPU Proxy
 
-GPU-Initiated Networking (GIN) is becoming essential for accelerating inter-node
-GPU communication. A widely adopted technique uses a CPU proxy thread, as seen
-in libraries like [MSCCL++](https://github.com/crazyguitar/mscclpp) and [UCCL](https://github.com/uccl-project/uccl/tree/main).
-This approach implements a multi-producer, single-consumer (MPSC) pattern: GPUs
-issue RDMA commands to a CPU thread, which then handles the actual data transfer.
-However, existing benchmarks typically measure GIN performance alongside
-collective communication operations, making it difficult to identify whether
-bottlenecks originate from the RDMA protocol, RDMA hardware, or the CUDA kernel
-itself. In this section, we benchmark GPU-initiated throughput using a proxy
-thread with direct EFA WRITE operations, independent of any collective
-communication algorithms.
+GPU-Initiated Networking (GIN) is an emerging paradigm that allows GPUs to
+trigger network operations directly, reducing CPU involvement and enabling
+tighter integration between computation and communication. This approach is
+particularly valuable for Mixture-of-Experts (MoE) models, where fine-grained
+all-to-all communication patterns benefit from GPU-driven scheduling. A common
+implementation uses a CPU proxy thread in a multi-producer, single-consumer
+(MPSC) pattern: GPU threads push RDMA commands to a shared queue, and a
+dedicated CPU thread polls the queue and issues the actual network operations.
+This pattern is employed by production libraries including
+[MSCCL++](https://github.com/microsoft/mscclpp) and
+[UCCL](https://github.com/uccl-project/uccl).
 
-Our testing reveals that CPU-initiated transfers (SingleDMA and MultiDMA)
-reach over 95% of the theoretical 100 Gbps bandwidth limit. GPU-initiated
-performance shows strong dependency on CUDA kernel execution patterns.
-Critically, we identified that `quiet` operations (comparable to
-`nvshmem_quiet`) that flush pending RDMA operations impose substantial overhead.
-The first figure illustrates how latency increases dramatically when commands
-are sent with `quiet` synchronization for each RDMA request to the CPU Proxy
-thread. Conversely, non-blocking commands (similar to NVSHMEM's `nvshmem_int_nbi`
-interface) maintain low latency by enabling pipelined GPU-to-CPU requests. The
-second and third plots confirm that pairing each GPU-initiated operation with
-`quiet` reduces performance by over 20% for large transfers and over 40% for
-small writes (8MiB). Minimizing `quiet` call frequency allows performance to
-match baseline levels (SingleDMA and MultiDMA) for large writes exceeding 64MiB.
-The benchmark source code is available [here](https://github.com/crazyguitar/Libefaxx/blob/main/src/include/bench/modules/proxy.cuh).
+Existing benchmarks typically measure GIN performance alongside collective
+communication algorithms, making it difficult to isolate whether bottlenecks
+originate from the RDMA protocol, network hardware, or CUDA kernel overhead.
+This [benchmark](proxy) isolates GIN throughput from collective communication
+overhead, measuring raw GPU-initiated EFA WRITE performance to identify
+optimization opportunities.
+
+**Baseline Performance:** CPU-initiated transfers (SingleDMA, MultiDMA) achieve
+over **95%** of the theoretical 100 Gbps EFA bandwidth, establishing the
+performance ceiling for GPU-initiated approaches.
+
+**Synchronization Overhead:** The `quiet` operation (analogous to `nvshmem_quiet`
+or memory fence) that flushes pending RDMA requests and ensures completion
+introduces substantial overhead. Issuing `quiet` after each RDMA request
+increases latency dramatically and reduces throughput by **>20%** for large
+transfers and **>40%** for small writes (8 MiB). This overhead stems from the
+round-trip synchronization between GPU and CPU proxy, creating pipeline bubbles.
+
+**Non-Blocking Interface:** Using non-blocking commands (similar to
+`nvshmem_put_nbi`) enables pipelined GPU-to-CPU requests, maintaining low
+latency by allowing multiple RDMA operations to be in flight simultaneously.
+Minimizing `quiet` frequency—batching multiple operations before
+synchronization—allows performance to match CPU-initiated baselines for
+transfers exceeding 64 MiB.
+
+Source code: [proxy.cuh](https://github.com/crazyguitar/Libefaxx/blob/main/src/include/bench/modules/proxy.cuh)
 
 ![proxy](imgs/proxy.png)
 
@@ -162,17 +218,42 @@ The benchmark source code is available [here](https://github.com/crazyguitar/Lib
 
 ## NVLink GPU-to-GPU Communication Performance
 
-NVLink enables direct GPU-to-GPU data transfers with up to **3600 Gbps** theoretical
-bandwidth, bypassing the CPU entirely. Using CUDA IPC (Inter-Process Communication),
-a process can export device memory via `cudaIpcGetMemHandle` and share it with another
-process, which imports it using `cudaIpcOpenMemHandle`. Once mapped, remote GPU memory
-can be accessed directly from CUDA kernels, enabling efficient cross-GPU writes over
-NVLink.
+NVLink is NVIDIA's high-bandwidth interconnect for direct GPU-to-GPU
+communication, providing up to **3600 Gbps** (450 GB/s) theoretical bandwidth on
+H100 GPUs—approximately 36× faster than PCIe Gen5. NVLink bypasses the CPU
+entirely, enabling peer-to-peer memory access between GPUs within the same node.
+This capability is essential for intra-node communication in tensor parallelism
+and pipeline parallelism, where GPUs frequently exchange activations and
+gradients.
 
-Our benchmarks ([IPC](ipc)) reveal that NVLink throughput is highly dependent on CUDA
-kernel parallelism. Specifically, increasing the grid dimension significantly improves
-bandwidth, while block dimension has minimal impact on performance. Unlike EFA, where
-small messages underperform, NVLink bandwidth remains stable across message sizes.
+Using CUDA IPC (Inter-Process Communication), processes can share GPU memory
+across process boundaries. The exporting process calls `cudaIpcGetMemHandle` to
+create a shareable handle, and the importing process calls `cudaIpcOpenMemHandle`
+to map the remote memory into its address space. Once mapped, CUDA kernels can
+read from and write to remote GPU memory directly over NVLink, enabling
+zero-copy data exchange.
+
+**Parallelism Impact:** Unlike EFA where bandwidth is primarily limited by
+network hardware, NVLink throughput depends heavily on CUDA kernel parallelism.
+Increasing grid dimensions (number of thread blocks) significantly improves
+bandwidth by generating more concurrent memory transactions, while block
+dimensions (threads per block) have minimal impact. This behavior reflects
+NVLink's ability to handle many small transactions efficiently when sufficient
+parallelism is available.
+
+**Benchmark Results ([IPC](ipc)):**
+- 1×256 grid: ~350 GB/s (9% peak) — insufficient parallelism to saturate NVLink
+- 128×256 grid: ~2971 GB/s (78% peak) — near-optimal utilization
+
+**Scaling Behavior:** Small and large grid configurations achieve similar
+performance at smaller data sizes where NVLink is not saturated. Throughput
+scales with message size until saturation. At 1 GB with 16 grid dimensions,
+performance degradation suggests potential contention under full NVLink load,
+possibly due to memory controller saturation or TLB pressure.
+
+Note: Current implementation achieves ~78% peak due to `cudaStreamSynchronize`
+overhead after each round. Asynchronous completion tracking could improve
+utilization.
 
 ```
  NVLink IPC Write (GPU-to-GPU Direct Memory Access)
@@ -199,12 +280,5 @@ small messages underperform, NVLink bandwidth remains stable across message size
   - 1×256:   ~350 GB/s  (9% peak)   - insufficient parallelism
   - 128×256: ~2971 GB/s (78% peak)  - near-optimal utilization
 ```
-
-The figure below shows that small and large grid configurations achieve similar
-performance at smaller data sizes, as the data volume is insufficient to saturate
-NVLink. Throughput scales with message size until saturation. At 1 GB with 16 grid
-dimensions, we observed unexpected performance degradation, suggesting potential
-contention under full NVLink saturation. Note that the current implementation achieves
-only ~2971 GB/s (78% peak) due to `cudaStreamSynchronize` calls after each round.
 
 ![ipc](imgs/ipc.png)
