@@ -5,9 +5,6 @@
 #include <tuple>
 #include <vector>
 
-template <typename T>
-struct Queue;
-
 enum class DeviceRequestType : uint32_t { kPut = 0, kGet = 1, kFence = 2, kCount = 3 };
 
 struct DeviceRequest {
@@ -19,8 +16,9 @@ struct DeviceRequest {
 };
 
 /** @brief Context for GPU kernel to access queue and counters */
+template <typename Q>
 struct DeviceContext {
-  Queue<DeviceRequest>* __restrict__ queue;
+  Q* __restrict__ queue;
   uint64_t* __restrict__ posted;
   uint64_t* __restrict__ completed;
   void* const* __restrict__ ipc_ptrs;  ///< Array of IPC pointers indexed by rank (nullptr for remote ranks)

@@ -1,6 +1,11 @@
 /**
  * @file main.cu
  * @brief EFA Proxy Write Benchmark - GPU-initiated RDMA write via CPU proxy
+ *
+ * Benchmarks three queue types for GPU→CPU communication:
+ *   - Queue(Managed):  cudaMallocManaged - unified memory with page migration
+ *   - PinnedQueue:     cudaHostAlloc - GPU writes over PCIe to host DRAM
+ *   - GdrQueue:        GDRCopy - GPU writes to VRAM, CPU reads via BAR1
  */
 #include <bench/arguments.h>
 #include <rdma/fabric/memory.h>
@@ -8,7 +13,11 @@
 #include <bench/modules/proxy.cuh>
 #include <bench/mpi/fabric.cuh>
 
-template <typename Peer, bool MultiChannel, template <typename, bool, typename> class Writer = ProxyWrite, typename Launcher = KernelBlocking>
+template <
+    typename Peer,
+    bool MultiChannel,
+    template <typename, bool, template <typename> class> class Writer = ProxyWrite,
+    template <typename> class Launcher = KernelBlocking>
 struct ProxyBench {
   int iters, target;
 
@@ -30,7 +39,7 @@ struct ProxyBench {
   }
 };
 
-template <typename BufType, bool MultiChannel, typename Launcher = KernelBlocking>
+template <typename BufType, bool MultiChannel, template <typename> class Launcher = KernelBlocking>
 struct Test {
   static BenchResult Run(size_t size, const Options& opts, double single_bw, double total_bw) {
     FabricBench peer;
@@ -65,10 +74,20 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
   return results;
 }
 
-using ProxySingle = Test<SymmetricDMAMemory, false>;
-using ProxyMulti = Test<SymmetricDMAMemory, true>;
-using ProxySingleNBI = Test<SymmetricDMAMemory, false, KernelNBI>;
-using ProxyMultiNBI = Test<SymmetricDMAMemory, true, KernelNBI>;
+// Queue type aliases
+using ManagedMem = SymmetricDMAMemoryT<Queue<DeviceRequest>>;
+using PinnedMem = SymmetricDMAMemoryT<PinnedQueue<DeviceRequest>>;
+using GdrMem = SymmetricDMAMemoryT<GdrQueue<DeviceRequest>>;
+
+// Blocking mode tests
+using ManagedBlocking = Test<ManagedMem, false, KernelBlocking>;
+using PinnedBlocking = Test<PinnedMem, false, KernelBlocking>;
+using GdrBlocking = Test<GdrMem, false, KernelBlocking>;
+
+// NBI mode tests
+using ManagedNBI = Test<ManagedMem, false, KernelNBI>;
+using PinnedNBI = Test<PinnedMem, false, KernelNBI>;
+using GdrNBI = Test<GdrMem, false, KernelNBI>;
 
 int main(int argc, char* argv[]) {
   try {
@@ -81,13 +100,27 @@ int main(int argc, char* argv[]) {
     double single_bw = peer.GetBandwidth(0) / 1e9;
     double total_bw = peer.GetTotalBandwidth() / 1e9;
 
-    std::vector<std::array<BenchResult, 4>> results;
-    for (auto size : sizes) results.push_back(RunTests<ProxySingle, ProxyMulti, ProxySingleNBI, ProxyMultiNBI>(size, opts, single_bw, total_bw));
+    // Blocking mode benchmark
+    std::vector<std::array<BenchResult, 3>> blocking_results;
+    for (auto size : sizes) {
+      blocking_results.push_back(RunTests<ManagedBlocking, PinnedBlocking, GdrBlocking>(size, opts, single_bw, total_bw));
+    }
+
+    // NBI mode benchmark
+    std::vector<std::array<BenchResult, 3>> nbi_results;
+    for (auto size : sizes) {
+      nbi_results.push_back(RunTests<ManagedNBI, PinnedNBI, GdrNBI>(size, opts, single_bw, total_bw));
+    }
 
     if (rank == 0) {
       FabricBench::Print(
-          "EFA Proxy Write Benchmark", nranks, opts.warmup, opts.repeat, total_bw, "GPU kernel -> Queue -> RDMA write, rank0 -> rank_k",
-          {"ProxySingle", "ProxyMulti", "ProxySingleNBI", "ProxyMultiNBI"}, results
+          "EFA Proxy Write - Blocking Mode", nranks, opts.warmup, opts.repeat, total_bw, "GPU kernel -> Queue -> RDMA write (sync per op)",
+          {"Managed", "Pinned", "GdrQueue"}, blocking_results
+      );
+      printf("\n");
+      FabricBench::Print(
+          "EFA Proxy Write - NBI Mode", nranks, opts.warmup, opts.repeat, total_bw, "GPU kernel -> Queue -> RDMA write (batch, sync at end)",
+          {"Managed", "Pinned", "GdrQueue"}, nbi_results
       );
     }
     return 0;
