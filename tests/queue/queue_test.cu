@@ -1,3 +1,14 @@
+/**
+ * @file queue_test.cu
+ * @brief MPMC Queue Tests and Benchmarks
+ *
+ * Three queue types tested:
+ *   - Queue(Managed):  cudaMallocManaged - unified memory with page migration
+ *   - PinnedQueue:     cudaHostAlloc + cudaHostGetDevicePointer - GPU writes over PCIe to host DRAM
+ *   - GdrQueue:        GDRCopy - GPU memory with CPU access via PCIe BAR1
+ *
+ * See flow charts above each benchmark function for detailed operation.
+ */
 #include <cuda.h>
 #include <spdlog/spdlog.h>
 
@@ -19,350 +30,497 @@
 
 #define LAUNCH_KERNEL(cfg, kernel, ...) CUDA_CHECK(cudaLaunchKernelEx(cfg, kernel, ##__VA_ARGS__))
 
-// =============================================================================
-// Test: Power-of-two size validation
-// =============================================================================
-void TestPowerOfTwoValidation() {
-  printf("[TEST] Power-of-two size validation...\n");
-
-  // Valid sizes (power of two)
-  Queue<int>* q1;
-  CUDA_CHECK(cudaMallocManaged(&q1, sizeof(Queue<int>)));
-  new (q1) Queue<int>(4);
-  q1->~Queue<int>();
-  CUDA_CHECK(cudaFree(q1));
-
-  Queue<int>* q2;
-  CUDA_CHECK(cudaMallocManaged(&q2, sizeof(Queue<int>)));
-  new (q2) Queue<int>(16);
-  q2->~Queue<int>();
-  CUDA_CHECK(cudaFree(q2));
-
-  Queue<int>* q3;
-  CUDA_CHECK(cudaMallocManaged(&q3, sizeof(Queue<int>)));
-  new (q3) Queue<int>(1024);
-  q3->~Queue<int>();
-  CUDA_CHECK(cudaFree(q3));
-
-  printf("[PASS] Power-of-two validation passed for valid sizes.\n");
-}
-
-// =============================================================================
-// Test: Basic single-threaded push/pop
-// =============================================================================
-__global__ void PushSingle(Queue<int>* queue, int value, bool* success) { *success = queue->Push(value); }
-
-void TestSingleThreadedBasic() {
-  printf("[TEST] Single-threaded basic push/pop...\n");
-
-  Queue<int>* queue;
-  CUDA_CHECK(cudaMallocManaged(&queue, sizeof(Queue<int>)));
-  new (queue) Queue<int>(4);
-
-  bool* push_success;
-  CUDA_CHECK(cudaMallocManaged(&push_success, sizeof(bool)));
-
-  cudaStream_t stream;
-  CUDA_CHECK(cudaStreamCreate(&stream));
-
-  cudaLaunchConfig_t cfg{0};
-  cfg.gridDim = dim3(1, 1, 1);
-  cfg.blockDim = dim3(1, 1, 1);
-  cfg.stream = stream;
-
-  // Push 4 items (queue size is 4)
-  for (int i = 0; i < 4; ++i) {
-    *push_success = false;
-    LAUNCH_KERNEL(&cfg, PushSingle, queue, i, push_success);
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    TEST_ASSERT(*push_success, "Push should succeed for non-full queue");
+template <typename T>
+struct QueueAlloc {
+  static constexpr const char* Name = "Queue(Managed)";
+  static Queue<T>* Create(size_t size) {
+    Queue<T>* q;
+    CUDA_CHECK(cudaMallocManaged(&q, sizeof(Queue<T>)));
+    new (q) Queue<T>(size);
+    return q;
   }
-
-  // Verify queue is full by trying to push (should fail)
-  *push_success = true;
-  LAUNCH_KERNEL(&cfg, PushSingle, queue, 99, push_success);
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-  TEST_ASSERT(!*push_success, "Push should fail when queue is full");
-
-  // Pop all items and verify
-  for (int i = 0; i < 4; ++i) {
-    int value;
-    bool pop_success = queue->Pop(value);
-    TEST_ASSERT(pop_success, "Pop should succeed for non-empty queue");
-    TEST_ASSERT(value == i, "Popped value should match pushed value");
+  static void Destroy(Queue<T>* q) {
+    q->~Queue<T>();
+    CUDA_CHECK(cudaFree(q));
   }
+};
 
-  // Verify queue is empty by trying to pop (should fail)
-  int dummy;
-  TEST_ASSERT(!queue->Pop(dummy), "Pop should fail for empty queue");
-
-  CUDA_CHECK(cudaStreamDestroy(stream));
-  CUDA_CHECK(cudaFree(push_success));
-  queue->~Queue<int>();
-  CUDA_CHECK(cudaFree(queue));
-
-  printf("[PASS] Single-threaded basic push/pop.\n");
-}
-
-// =============================================================================
-// Test: Full queue behavior
-// =============================================================================
-__global__ void TryPush(Queue<int>* queue, int value, bool* success) { *success = queue->Push(value); }
-
-void TestFullQueueBehavior() {
-  printf("[TEST] Full queue behavior...\n");
-
-  Queue<int>* queue;
-  CUDA_CHECK(cudaMallocManaged(&queue, sizeof(Queue<int>)));
-  new (queue) Queue<int>(4);
-
-  bool* push_success;
-  CUDA_CHECK(cudaMallocManaged(&push_success, sizeof(bool)));
-
-  cudaStream_t stream;
-  CUDA_CHECK(cudaStreamCreate(&stream));
-
-  cudaLaunchConfig_t cfg{0};
-  cfg.gridDim = dim3(1, 1, 1);
-  cfg.blockDim = dim3(1, 1, 1);
-  cfg.stream = stream;
-
-  // Fill the queue
-  for (int i = 0; i < 4; ++i) {
-    *push_success = false;
-    LAUNCH_KERNEL(&cfg, TryPush, queue, i, push_success);
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    TEST_ASSERT(*push_success, "Push should succeed while filling queue");
+template <typename T>
+struct GdrQueueAlloc {
+  static constexpr const char* Name = "GdrQueue";
+  static GdrQueue<T>* Create(size_t size) {
+    GdrQueue<T>* q;
+    CUDA_CHECK(cudaMallocManaged(&q, sizeof(GdrQueue<T>)));
+    new (q) GdrQueue<T>(size);
+    return q;
   }
+  static void Destroy(GdrQueue<T>* q) {
+    q->~GdrQueue<T>();
+    CUDA_CHECK(cudaFree(q));
+  }
+};
 
-  // Try to push to full queue (should fail)
-  *push_success = true;
-  LAUNCH_KERNEL(&cfg, TryPush, queue, 99, push_success);
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-  TEST_ASSERT(!*push_success, "Push should fail when queue is full");
+template <typename T>
+struct PinnedQueueAlloc {
+  static constexpr const char* Name = "PinnedQueue";
+  static PinnedQueue<T>* Create(size_t size) {
+    PinnedQueue<T>* q;
+    CUDA_CHECK(cudaMallocManaged(&q, sizeof(PinnedQueue<T>)));
+    new (q) PinnedQueue<T>(size);
+    return q;
+  }
+  static void Destroy(PinnedQueue<T>* q) {
+    q->~PinnedQueue<T>();
+    CUDA_CHECK(cudaFree(q));
+  }
+};
 
-  CUDA_CHECK(cudaStreamDestroy(stream));
-  CUDA_CHECK(cudaFree(push_success));
-  queue->~Queue<int>();
-  CUDA_CHECK(cudaFree(queue));
-
-  printf("[PASS] Full queue behavior.\n");
+// =============================================================================
+// Generic Kernels
+// =============================================================================
+template <typename Q>
+__global__ void KernelPushSingle(Q* queue, int value, bool* success) {
+  *success = queue->Push(value);
 }
 
-// =============================================================================
-// Test: Empty queue behavior
-// =============================================================================
-void TestEmptyQueueBehavior() {
-  printf("[TEST] Empty queue behavior...\n");
-
-  Queue<int>* queue;
-  CUDA_CHECK(cudaMallocManaged(&queue, sizeof(Queue<int>)));
-  new (queue) Queue<int>(4);
-
-  // Verify new queue is empty by trying to pop (should fail)
-  int dummy;
-  TEST_ASSERT(!queue->Pop(dummy), "Pop should fail for empty queue");
-
-  queue->~Queue<int>();
-  CUDA_CHECK(cudaFree(queue));
-
-  printf("[PASS] Empty queue behavior.\n");
-}
-
-// =============================================================================
-// Test: Multi-producer (GPU threads) single-consumer (CPU thread)
-// =============================================================================
-static constexpr int kMPSCThreads = 256;
-static constexpr int kMPSCBlocks = 4;
-static constexpr int kMPSCQueueSize = kMPSCThreads * kMPSCBlocks;
-
-__global__ void MultiProduce(Queue<int>* queue, int size) {
+template <typename Q>
+__global__ void KernelMultiProduce(Q* queue, int size) {
   int idx = threadIdx.x + blockIdx.x * blockDim.x;
   if (idx < size) {
-    // Retry push until successful
-    // Note: In production code, consider adding backoff or limiting retry attempts
-    while (!queue->Push(idx)) {
-      // Yield briefly to reduce contention (memory fence helps prevent aggressive spinning)
-      __threadfence();
-    }
+    while (!queue->Push(idx)) __threadfence();
   }
 }
 
-void TestMultiProducerSingleConsumer() {
-  printf("[TEST] Multi-producer (GPU) single-consumer (CPU)...\n");
+// =============================================================================
+// Templated Tests
+// =============================================================================
+template <typename Q, typename Alloc>
+void TestSingleThreadedBasic() {
+  printf("[TEST] %s: Single-threaded basic push/pop...\n", Alloc::Name);
 
-  Queue<int>* queue;
-  CUDA_CHECK(cudaMallocManaged(&queue, sizeof(Queue<int>)));
-  new (queue) Queue<int>(kMPSCQueueSize);
+  auto* queue = Alloc::Create(4);
+  bool* push_success;
+  CUDA_CHECK(cudaMallocManaged(&push_success, sizeof(bool)));
 
+  cudaStream_t stream;
+  CUDA_CHECK(cudaStreamCreate(&stream));
+  cudaLaunchConfig_t cfg{};
+  cfg.gridDim = cfg.blockDim = dim3(1, 1, 1);
+  cfg.stream = stream;
+
+  for (int i = 0; i < 4; ++i) {
+    *push_success = false;
+    LAUNCH_KERNEL(&cfg, KernelPushSingle<Q>, queue, i, push_success);
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    TEST_ASSERT(*push_success, "Push should succeed");
+  }
+
+  *push_success = true;
+  LAUNCH_KERNEL(&cfg, KernelPushSingle<Q>, queue, 99, push_success);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  TEST_ASSERT(!*push_success, "Push should fail when full");
+
+  for (int i = 0; i < 4; ++i) {
+    int value;
+    TEST_ASSERT(queue->Pop(value), "Pop should succeed");
+    TEST_ASSERT(value == i, "Value should match");
+  }
+
+  int dummy;
+  TEST_ASSERT(!queue->Pop(dummy), "Pop should fail when empty");
+
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  CUDA_CHECK(cudaFree(push_success));
+  Alloc::Destroy(queue);
+  printf("[PASS] %s: Single-threaded basic push/pop.\n", Alloc::Name);
+}
+
+template <typename Q, typename Alloc>
+void TestEmptyQueue() {
+  printf("[TEST] %s: Empty queue behavior...\n", Alloc::Name);
+  auto* queue = Alloc::Create(4);
+  int dummy;
+  TEST_ASSERT(!queue->Pop(dummy), "Pop should fail for empty queue");
+  Alloc::Destroy(queue);
+  printf("[PASS] %s: Empty queue behavior.\n", Alloc::Name);
+}
+
+template <typename Q, typename Alloc>
+void TestFullQueue() {
+  printf("[TEST] %s: Full queue behavior...\n", Alloc::Name);
+
+  auto* queue = Alloc::Create(4);
+  bool* push_success;
+  CUDA_CHECK(cudaMallocManaged(&push_success, sizeof(bool)));
+
+  cudaStream_t stream;
+  CUDA_CHECK(cudaStreamCreate(&stream));
+  cudaLaunchConfig_t cfg{};
+  cfg.gridDim = cfg.blockDim = dim3(1, 1, 1);
+  cfg.stream = stream;
+
+  for (int i = 0; i < 4; ++i) {
+    *push_success = false;
+    LAUNCH_KERNEL(&cfg, KernelPushSingle<Q>, queue, i, push_success);
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    TEST_ASSERT(*push_success, "Push should succeed");
+  }
+
+  *push_success = true;
+  LAUNCH_KERNEL(&cfg, KernelPushSingle<Q>, queue, 99, push_success);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  TEST_ASSERT(!*push_success, "Push should fail when full");
+
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  CUDA_CHECK(cudaFree(push_success));
+  Alloc::Destroy(queue);
+  printf("[PASS] %s: Full queue behavior.\n", Alloc::Name);
+}
+
+template <typename Q, typename Alloc>
+void TestWraparound() {
+  printf("[TEST] %s: Wraparound behavior...\n", Alloc::Name);
+
+  auto* queue = Alloc::Create(4);
+  bool* push_success;
+  CUDA_CHECK(cudaMallocManaged(&push_success, sizeof(bool)));
+
+  cudaStream_t stream;
+  CUDA_CHECK(cudaStreamCreate(&stream));
+  cudaLaunchConfig_t cfg{};
+  cfg.gridDim = cfg.blockDim = dim3(1, 1, 1);
+  cfg.stream = stream;
+
+  for (int round = 0; round < 10; ++round) {
+    for (int i = 0; i < 4; ++i) {
+      *push_success = false;
+      LAUNCH_KERNEL(&cfg, KernelPushSingle<Q>, queue, round * 100 + i, push_success);
+      CUDA_CHECK(cudaStreamSynchronize(stream));
+      TEST_ASSERT(*push_success, "Push should succeed");
+    }
+    for (int i = 0; i < 4; ++i) {
+      int value;
+      TEST_ASSERT(queue->Pop(value), "Pop should succeed");
+      TEST_ASSERT(value == round * 100 + i, "Value should match");
+    }
+  }
+
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  CUDA_CHECK(cudaFree(push_success));
+  Alloc::Destroy(queue);
+  printf("[PASS] %s: Wraparound behavior.\n", Alloc::Name);
+}
+
+template <typename Q, typename Alloc>
+void TestMPSC() {
+  constexpr int kThreads = 256, kBlocks = 4, kTotal = kThreads * kBlocks;
+  printf("[TEST] %s: Multi-producer single-consumer...\n", Alloc::Name);
+
+  auto* queue = Alloc::Create(kTotal);
   cudaStream_t stream;
   CUDA_CHECK(cudaStreamCreate(&stream));
 
   std::vector<int> consumed;
-  consumed.reserve(kMPSCQueueSize);
+  consumed.reserve(kTotal);
 
-  // Start consumer thread
   std::thread consumer([&]() {
-    int data;
-    int count = 0;
-    while (count < kMPSCQueueSize) {
+    int data, count = 0;
+    while (count < kTotal) {
       if (queue->Pop(data)) {
         consumed.push_back(data);
         count++;
-      } else {
+      } else
         std::this_thread::yield();
-      }
     }
   });
 
-  // Launch producer kernel
-  cudaLaunchConfig_t cfg{0};
-  cfg.gridDim = dim3(kMPSCBlocks, 1, 1);
-  cfg.blockDim = dim3(kMPSCThreads, 1, 1);
+  cudaLaunchConfig_t cfg{};
+  cfg.gridDim = dim3(kBlocks, 1, 1);
+  cfg.blockDim = dim3(kThreads, 1, 1);
   cfg.stream = stream;
-  LAUNCH_KERNEL(&cfg, MultiProduce, queue, kMPSCQueueSize);
+  LAUNCH_KERNEL(&cfg, KernelMultiProduce<Q>, queue, kTotal);
   CUDA_CHECK(cudaStreamSynchronize(stream));
-
-  // Wait for consumer
   consumer.join();
 
-  // Verify all items were consumed
-  TEST_ASSERT(consumed.size() == kMPSCQueueSize, "All items should be consumed");
-
-  // Verify all values are present (order may vary)
+  TEST_ASSERT(consumed.size() == kTotal, "All items consumed");
   std::sort(consumed.begin(), consumed.end());
-  for (int i = 0; i < kMPSCQueueSize; ++i) {
-    TEST_ASSERT(consumed[i] == i, "All values should be present");
-  }
+  for (int i = 0; i < kTotal; ++i) TEST_ASSERT(consumed[i] == i, "Value present");
 
   CUDA_CHECK(cudaStreamDestroy(stream));
-  queue->~Queue<int>();
-  CUDA_CHECK(cudaFree(queue));
-
-  printf("[PASS] Multi-producer (GPU) single-consumer (CPU).\n");
+  Alloc::Destroy(queue);
+  printf("[PASS] %s: Multi-producer single-consumer.\n", Alloc::Name);
 }
 
-// =============================================================================
-// Test: Multi-producer (GPU threads) multi-consumer (CPU threads)
-// =============================================================================
-static constexpr int kMPMCThreads = 128;
-static constexpr int kMPMCBlocks = 4;
-static constexpr int kMPMCQueueSize = kMPMCThreads * kMPMCBlocks;
-static constexpr int kNumConsumers = 4;
+template <typename Q, typename Alloc>
+void TestMPMC() {
+  constexpr int kThreads = 128, kBlocks = 4, kTotal = kThreads * kBlocks, kConsumers = 4;
+  printf("[TEST] %s: Multi-producer multi-consumer...\n", Alloc::Name);
 
-void TestMultiProducerMultiConsumer() {
-  printf("[TEST] Multi-producer (GPU) multi-consumer (CPU threads)...\n");
-
-  Queue<int>* queue;
-  CUDA_CHECK(cudaMallocManaged(&queue, sizeof(Queue<int>)));
-  new (queue) Queue<int>(kMPMCQueueSize);
-
+  auto* queue = Alloc::Create(kTotal);
   cudaStream_t stream;
   CUDA_CHECK(cudaStreamCreate(&stream));
 
   std::vector<int> all_consumed;
-  std::mutex consumed_mutex;
-  std::atomic<int> total_consumed{0};
+  std::mutex mtx;
+  std::atomic<int> total{0};
 
-  // Start multiple consumer threads
   std::vector<std::thread> consumers;
-  for (int i = 0; i < kNumConsumers; ++i) {
+  for (int i = 0; i < kConsumers; ++i) {
     consumers.emplace_back([&]() {
       int data;
-      std::vector<int> local_consumed;
-      while (total_consumed.load() < kMPMCQueueSize) {
+      std::vector<int> local;
+      while (total.load() < kTotal) {
         if (queue->Pop(data)) {
-          local_consumed.push_back(data);
-          total_consumed.fetch_add(1);
-        } else {
+          local.push_back(data);
+          total.fetch_add(1);
+        } else
           std::this_thread::yield();
-        }
       }
-      // Merge local results
-      std::lock_guard<std::mutex> lock(consumed_mutex);
-      all_consumed.insert(all_consumed.end(), local_consumed.begin(), local_consumed.end());
+      std::lock_guard<std::mutex> lock(mtx);
+      all_consumed.insert(all_consumed.end(), local.begin(), local.end());
     });
   }
 
-  // Launch producer kernel
-  cudaLaunchConfig_t cfg{0};
-  cfg.gridDim = dim3(kMPMCBlocks, 1, 1);
-  cfg.blockDim = dim3(kMPMCThreads, 1, 1);
+  cudaLaunchConfig_t cfg{};
+  cfg.gridDim = dim3(kBlocks, 1, 1);
+  cfg.blockDim = dim3(kThreads, 1, 1);
   cfg.stream = stream;
-  LAUNCH_KERNEL(&cfg, MultiProduce, queue, kMPMCQueueSize);
+  LAUNCH_KERNEL(&cfg, KernelMultiProduce<Q>, queue, kTotal);
   CUDA_CHECK(cudaStreamSynchronize(stream));
+  for (auto& c : consumers) c.join();
 
-  // Wait for all consumers
-  for (auto& consumer : consumers) {
-    consumer.join();
-  }
-
-  // Verify all items were consumed
-  TEST_ASSERT(all_consumed.size() == kMPMCQueueSize, "All items should be consumed");
-
-  // Verify all values are present (order may vary)
+  TEST_ASSERT(all_consumed.size() == kTotal, "All items consumed");
   std::sort(all_consumed.begin(), all_consumed.end());
-  for (int i = 0; i < kMPMCQueueSize; ++i) {
-    TEST_ASSERT(all_consumed[i] == i, "All values should be present");
-  }
+  for (int i = 0; i < kTotal; ++i) TEST_ASSERT(all_consumed[i] == i, "Value present");
 
   CUDA_CHECK(cudaStreamDestroy(stream));
-  queue->~Queue<int>();
-  CUDA_CHECK(cudaFree(queue));
-
-  printf("[PASS] Multi-producer (GPU) multi-consumer (CPU threads).\n");
+  Alloc::Destroy(queue);
+  printf("[PASS] %s: Multi-producer multi-consumer.\n", Alloc::Name);
 }
 
-// =============================================================================
-// Test: Queue wraparound behavior
-// =============================================================================
-void TestWraparound() {
-  printf("[TEST] Queue wraparound behavior...\n");
+template <typename Q, typename Alloc>
+void TestStress() {
+  constexpr int kThreads = 512, kBlocks = 32, kTotal = kThreads * kBlocks, kQueueSize = 256;
+  printf("[TEST] %s: Stress test - high contention...\n", Alloc::Name);
 
-  Queue<int>* queue;
-  CUDA_CHECK(cudaMallocManaged(&queue, sizeof(Queue<int>)));
-  new (queue) Queue<int>(4);
+  auto* queue = Alloc::Create(kQueueSize);
+  cudaStream_t stream;
+  CUDA_CHECK(cudaStreamCreate(&stream));
 
-  bool* push_success;
-  CUDA_CHECK(cudaMallocManaged(&push_success, sizeof(bool)));
+  std::vector<int> consumed;
+  consumed.reserve(kTotal);
+
+  std::thread consumer([&]() {
+    int data, count = 0;
+    while (count < kTotal) {
+      if (queue->Pop(data)) {
+        consumed.push_back(data);
+        count++;
+      }
+    }
+  });
+
+  cudaLaunchConfig_t cfg{};
+  cfg.gridDim = dim3(kBlocks, 1, 1);
+  cfg.blockDim = dim3(kThreads, 1, 1);
+  cfg.stream = stream;
+  LAUNCH_KERNEL(&cfg, KernelMultiProduce<Q>, queue, kTotal);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  consumer.join();
+
+  TEST_ASSERT(consumed.size() == kTotal, "All items consumed");
+  std::sort(consumed.begin(), consumed.end());
+  for (int i = 0; i < kTotal; ++i) TEST_ASSERT(consumed[i] == i, "Value present");
+
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  Alloc::Destroy(queue);
+  printf("[PASS] %s: Stress test - high contention.\n", Alloc::Name);
+}
+
+// Run all tests for a queue type
+template <typename Q, typename Alloc>
+void RunAllTests() {
+  TestSingleThreadedBasic<Q, Alloc>();
+  TestEmptyQueue<Q, Alloc>();
+  TestFullQueue<Q, Alloc>();
+  TestWraparound<Q, Alloc>();
+  TestMPSC<Q, Alloc>();
+  TestMPMC<Q, Alloc>();
+  TestStress<Q, Alloc>();
+}
+
+/**
+ * Throughput Benchmark (Sequential): GPU pushes all, then CPU pops all
+ *
+ *   ┌───────┐  push N items  ┌───────┐   sync   ┌───────┐  pop N items  ┌───────┐
+ *   │ Start │ ─────────────► │  GPU  │ ───────► │ Wait  │ ────────────► │  CPU  │
+ *   └───────┘                │Kernel │          │ Sync  │               │ Loop  │
+ *                            └───────┘          └───────┘               └───────┘
+ */
+template <typename Q, typename Alloc>
+void BenchThroughput(cudaStream_t stream, cudaEvent_t start, cudaEvent_t stop) {
+  constexpr int kThreads = 256, kBlocks = 16, kItems = kThreads * kBlocks, kIters = 10;
+
+  auto* queue = Alloc::Create(kItems);
+
+  cudaLaunchConfig_t cfg{};
+  cfg.gridDim = dim3(kBlocks, 1, 1);
+  cfg.blockDim = dim3(kThreads, 1, 1);
+  cfg.stream = stream;
+
+  // Warmup
+  for (int i = 0; i < 2; ++i) {
+    LAUNCH_KERNEL(&cfg, KernelMultiProduce<Q>, queue, kItems);
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    int data;
+    while (queue->Pop(data)) {
+    }
+  }
+
+  CUDA_CHECK(cudaEventRecord(start, stream));
+  for (int iter = 0; iter < kIters; ++iter) {
+    LAUNCH_KERNEL(&cfg, KernelMultiProduce<Q>, queue, kItems);
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    int data;
+    while (queue->Pop(data)) {
+    }
+  }
+  CUDA_CHECK(cudaEventRecord(stop, stream));
+  CUDA_CHECK(cudaEventSynchronize(stop));
+
+  float ms = 0;
+  CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
+  printf("  %-20s %.4f ms, %.4f M ops/sec\n", Alloc::Name, ms, (kItems * kIters) / (ms / 1000.0) / 1e6);
+
+  Alloc::Destroy(queue);
+}
+
+// Helper for host-side push (GdrQueue/PinnedQueue need PushHost, Queue uses Push)
+template <typename Q>
+inline bool HostPush(Q* queue, const typename std::remove_pointer<decltype(queue)>::type::value_type& data) {
+  return queue->Push(data);
+}
+template <typename T>
+inline bool HostPush(GdrQueue<T>* queue, const T& data) {
+  return queue->PushHost(data);
+}
+template <typename T>
+inline bool HostPush(PinnedQueue<T>* queue, const T& data) {
+  return queue->PushHost(data);
+}
+
+/**
+ * CPU Polling Latency: Pure CPU read speed (no GPU involvement)
+ *
+ *   ┌───────┐  pre-fill 1 item  ┌───────┐  pop() x 100K  ┌─────────┐
+ *   │ Setup │ ────────────────► │ Queue │ ──────────────► │ Measure │
+ *   └───────┘                   └───────┘                 └─────────┘
+ */
+template <typename Q, typename Alloc>
+void BenchPolling() {
+  constexpr int kIters = 100000;
+
+  auto* queue = Alloc::Create(64);
+  HostPush(queue, 42);
+
+  auto t_start = std::chrono::high_resolution_clock::now();
+  for (int i = 0; i < kIters; ++i) {
+    int data;
+    volatile bool found = queue->Pop(data);
+    (void)found;
+  }
+  auto t_end = std::chrono::high_resolution_clock::now();
+  double ns = std::chrono::duration<double, std::nano>(t_end - t_start).count();
+  printf("  %-20s %.4f ns/op\n", Alloc::Name, ns / kIters);
+
+  Alloc::Destroy(queue);
+}
+
+/**
+ * Concurrent Benchmark: GPU pushes WHILE CPU pops simultaneously
+ *
+ *   ┌─────────────────────────────────────────────────────────────┐
+ *   │                    Time ──────────────────►                 │
+ *   │                                                             │
+ *   │  GPU:  ┌─push─┬─push─┬─push─┬─push─┬─ ─ ─►                 │
+ *   │        └──────┴──────┴──────┴──────┘                        │
+ *   │                  ▼ data visible                             │
+ *   │  CPU:      ┌─pop─┬─pop─┬─pop─┬─pop─┬─ ─ ─►                 │
+ *   │            └─────┴─────┴─────┴─────┘                        │
+ *   └─────────────────────────────────────────────────────────────┘
+ */
+template <typename Q>
+__global__ void ConcurrentPushKernel(Q* queue, int iters) {
+  for (int i = 0; i < iters; ++i) {
+    while (!queue->Push(i)) {
+    }
+    __threadfence_system();
+  }
+}
+
+template <typename Q, typename Alloc>
+void BenchConcurrent() {
+  constexpr int kIters = 50000;
+
+  auto* queue = Alloc::Create(1024);
 
   cudaStream_t stream;
   CUDA_CHECK(cudaStreamCreate(&stream));
 
-  cudaLaunchConfig_t cfg{0};
-  cfg.gridDim = dim3(1, 1, 1);
-  cfg.blockDim = dim3(1, 1, 1);
+  cudaLaunchConfig_t cfg{};
+  cfg.gridDim = cfg.blockDim = dim3(1, 1, 1);
   cfg.stream = stream;
 
-  // Fill and drain multiple times to test wraparound
-  for (int round = 0; round < 5; ++round) {
-    // Fill queue
-    for (int i = 0; i < 4; ++i) {
-      *push_success = false;
-      LAUNCH_KERNEL(&cfg, PushSingle, queue, round * 100 + i, push_success);
-      CUDA_CHECK(cudaStreamSynchronize(stream));
-      TEST_ASSERT(*push_success, "Push should succeed during fill");
-    }
+  auto t_start = std::chrono::high_resolution_clock::now();
 
-    // Drain queue
-    for (int i = 0; i < 4; ++i) {
-      int value;
-      bool pop_success = queue->Pop(value);
-      TEST_ASSERT(pop_success, "Pop should succeed during drain");
-      TEST_ASSERT(value == round * 100 + i, "Value should match in order");
-    }
+  LAUNCH_KERNEL(&cfg, ConcurrentPushKernel<Q>, queue, kIters);
 
-    // Verify queue is empty by trying to pop (should fail)
-    int check_empty;
-    TEST_ASSERT(!queue->Pop(check_empty), "Queue should be empty after drain");
+  int consumed = 0;
+  while (consumed < kIters) {
+    int data;
+    if (queue->Pop(data)) consumed++;
   }
 
-  CUDA_CHECK(cudaStreamDestroy(stream));
-  CUDA_CHECK(cudaFree(push_success));
-  queue->~Queue<int>();
-  CUDA_CHECK(cudaFree(queue));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  auto t_end = std::chrono::high_resolution_clock::now();
 
-  printf("[PASS] Queue wraparound behavior.\n");
+  double us = std::chrono::duration<double, std::micro>(t_end - t_start).count();
+  printf("  %-20s %.4f us total, %.4f us/op\n", Alloc::Name, us, us / kIters);
+
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  Alloc::Destroy(queue);
+}
+
+void RunBenchmarks() {
+  printf("[BENCH] Throughput (GPU push, CPU pop) - sequential\n\n");
+
+  cudaStream_t stream;
+  cudaEvent_t start, stop;
+  CUDA_CHECK(cudaStreamCreate(&stream));
+  CUDA_CHECK(cudaEventCreate(&start));
+  CUDA_CHECK(cudaEventCreate(&stop));
+
+  BenchThroughput<Queue<int>, QueueAlloc<int>>(stream, start, stop);
+  BenchThroughput<PinnedQueue<int>, PinnedQueueAlloc<int>>(stream, start, stop);
+  BenchThroughput<GdrQueue<int>, GdrQueueAlloc<int>>(stream, start, stop);
+
+  CUDA_CHECK(cudaEventDestroy(stop));
+  CUDA_CHECK(cudaEventDestroy(start));
+  CUDA_CHECK(cudaStreamDestroy(stream));
+
+  printf("\n[BENCH] CPU polling latency (cached memory)\n\n");
+
+  BenchPolling<Queue<int>, QueueAlloc<int>>();
+  BenchPolling<PinnedQueue<int>, PinnedQueueAlloc<int>>();
+  BenchPolling<GdrQueue<int>, GdrQueueAlloc<int>>();
+
+  printf("\n[BENCH] Concurrent (GPU push + CPU pop simultaneously)\n\n");
+
+  BenchConcurrent<Queue<int>, QueueAlloc<int>>();
+  BenchConcurrent<PinnedQueue<int>, PinnedQueueAlloc<int>>();
+  BenchConcurrent<GdrQueue<int>, GdrQueueAlloc<int>>();
+
+  printf("\n");
 }
 
 // =============================================================================
@@ -371,16 +529,18 @@ void TestWraparound() {
 int main(int argc, char* argv[]) {
   CUDA_CHECK(cudaSetDevice(0));
 
-  printf("=== MPMC Queue Tests ===\n\n");
+  printf("=== Queue (Managed) Tests ===\n\n");
+  RunAllTests<Queue<int>, QueueAlloc<int>>();
 
-  TestPowerOfTwoValidation();
-  TestSingleThreadedBasic();
-  TestFullQueueBehavior();
-  TestEmptyQueueBehavior();
-  TestMultiProducerSingleConsumer();
-  TestMultiProducerMultiConsumer();
-  TestWraparound();
+  printf("\n=== PinnedQueue Tests ===\n\n");
+  RunAllTests<PinnedQueue<int>, PinnedQueueAlloc<int>>();
 
-  printf("\n=== All tests passed! ===\n");
+  printf("\n=== GdrQueue Tests ===\n\n");
+  RunAllTests<GdrQueue<int>, GdrQueueAlloc<int>>();
+
+  printf("\n=== Performance Benchmarks ===\n\n");
+  RunBenchmarks();
+
+  printf("=== All tests passed! ===\n");
   return 0;
 }
