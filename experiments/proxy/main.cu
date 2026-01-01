@@ -79,15 +79,25 @@ using ManagedMem = SymmetricDMAMemoryT<Queue<DeviceRequest>>;
 using PinnedMem = SymmetricDMAMemoryT<PinnedQueue<DeviceRequest>>;
 using GdrMem = SymmetricDMAMemoryT<GdrQueue<DeviceRequest>>;
 
-// Blocking mode tests
+// Single channel - Blocking mode
 using ManagedBlocking = Test<ManagedMem, false, KernelBlocking>;
 using PinnedBlocking = Test<PinnedMem, false, KernelBlocking>;
 using GdrBlocking = Test<GdrMem, false, KernelBlocking>;
 
-// NBI mode tests
+// Single channel - NBI mode
 using ManagedNBI = Test<ManagedMem, false, KernelNBI>;
 using PinnedNBI = Test<PinnedMem, false, KernelNBI>;
 using GdrNBI = Test<GdrMem, false, KernelNBI>;
+
+// Multi channel - Blocking mode
+using ManagedMultiBlocking = Test<ManagedMem, true, KernelBlocking>;
+using PinnedMultiBlocking = Test<PinnedMem, true, KernelBlocking>;
+using GdrMultiBlocking = Test<GdrMem, true, KernelBlocking>;
+
+// Multi channel - NBI mode
+using ManagedMultiNBI = Test<ManagedMem, true, KernelNBI>;
+using PinnedMultiNBI = Test<PinnedMem, true, KernelNBI>;
+using GdrMultiNBI = Test<GdrMem, true, KernelNBI>;
 
 int main(int argc, char* argv[]) {
   try {
@@ -100,27 +110,49 @@ int main(int argc, char* argv[]) {
     double single_bw = peer.GetBandwidth(0) / 1e9;
     double total_bw = peer.GetTotalBandwidth() / 1e9;
 
-    // Blocking mode benchmark
-    std::vector<std::array<BenchResult, 3>> blocking_results;
+    // Single channel - Blocking
+    std::vector<std::array<BenchResult, 3>> single_blocking;
     for (auto size : sizes) {
-      blocking_results.push_back(RunTests<ManagedBlocking, PinnedBlocking, GdrBlocking>(size, opts, single_bw, total_bw));
+      single_blocking.push_back(RunTests<ManagedBlocking, PinnedBlocking, GdrBlocking>(size, opts, single_bw, total_bw));
     }
 
-    // NBI mode benchmark
-    std::vector<std::array<BenchResult, 3>> nbi_results;
+    // Single channel - NBI
+    std::vector<std::array<BenchResult, 3>> single_nbi;
     for (auto size : sizes) {
-      nbi_results.push_back(RunTests<ManagedNBI, PinnedNBI, GdrNBI>(size, opts, single_bw, total_bw));
+      single_nbi.push_back(RunTests<ManagedNBI, PinnedNBI, GdrNBI>(size, opts, single_bw, total_bw));
+    }
+
+    // Multi channel - Blocking
+    std::vector<std::array<BenchResult, 3>> multi_blocking;
+    for (auto size : sizes) {
+      multi_blocking.push_back(RunTests<ManagedMultiBlocking, PinnedMultiBlocking, GdrMultiBlocking>(size, opts, single_bw, total_bw));
+    }
+
+    // Multi channel - NBI
+    std::vector<std::array<BenchResult, 3>> multi_nbi;
+    for (auto size : sizes) {
+      multi_nbi.push_back(RunTests<ManagedMultiNBI, PinnedMultiNBI, GdrMultiNBI>(size, opts, single_bw, total_bw));
     }
 
     if (rank == 0) {
       FabricBench::Print(
-          "EFA Proxy Write - Blocking Mode", nranks, opts.warmup, opts.repeat, total_bw, "GPU kernel -> Queue -> RDMA write (sync per op)",
-          {"Managed", "Pinned", "GdrQueue"}, blocking_results
+          "EFA Proxy Write - Single Channel Blocking", nranks, opts.warmup, opts.repeat, single_bw, "GPU -> Queue -> RDMA (sync per op)",
+          {"Managed", "Pinned", "GdrQueue"}, single_blocking
       );
       printf("\n");
       FabricBench::Print(
-          "EFA Proxy Write - NBI Mode", nranks, opts.warmup, opts.repeat, total_bw, "GPU kernel -> Queue -> RDMA write (batch, sync at end)",
-          {"Managed", "Pinned", "GdrQueue"}, nbi_results
+          "EFA Proxy Write - Single Channel NBI", nranks, opts.warmup, opts.repeat, single_bw, "GPU -> Queue -> RDMA (batch)",
+          {"Managed", "Pinned", "GdrQueue"}, single_nbi
+      );
+      printf("\n");
+      FabricBench::Print(
+          "EFA Proxy Write - Multi Channel Blocking", nranks, opts.warmup, opts.repeat, total_bw, "GPU -> Queue -> RDMA (sync per op, all EFAs)",
+          {"Managed", "Pinned", "GdrQueue"}, multi_blocking
+      );
+      printf("\n");
+      FabricBench::Print(
+          "EFA Proxy Write - Multi Channel NBI", nranks, opts.warmup, opts.repeat, total_bw, "GPU -> Queue -> RDMA (batch, all EFAs)",
+          {"Managed", "Pinned", "GdrQueue"}, multi_nbi
       );
     }
     return 0;
