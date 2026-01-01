@@ -30,26 +30,22 @@ inline constexpr size_t kCacheLineSize = 128;
  * | PinnedQueue  | PCIe to host     | Local DRAM       | CPU-primary workloads       |
  * | GdrQueue     | Local VRAM       | PCIe BAR1        | Concurrent GPU+CPU access   |
  *
- * Performance Characteristics (p5.48xlarge, H100):
+ * Performance Characteristics (p5.48xlarge, H100, from queue_test.cu):
  *
  *   Throughput (Sequential GPU push, then CPU pop):
- *     Queue(Managed)    1.1 Mops/sec   - Pages migrate to GPU, fast local writes
- *     GdrQueue          0.4 Mops/sec   - Stable, no migration overhead
- *     PinnedQueue       0.03 Mops/sec  - Every GPU atomic over PCIe (~40x slower)
+ *     Queue(Managed)    1.0914 Mops     - Pages migrate once per phase, fast local access
+ *     GdrQueue          0.3712 Mops     - GPU writes local, CPU reads via BAR1
+ *     PinnedQueue       0.0264 Mops     - Every GPU atomic over PCIe
  *
- *   CPU Polling Latency (pure CPU read speed):
- *     Queue(Managed)    ~1.8 ns/op     - Cached in CPU DRAM after migration
- *     PinnedQueue       ~1.7 ns/op     - Already in host DRAM
- *     GdrQueue          ~1360 ns/op    - PCIe BAR1 round-trip to GPU VRAM
+ *   CPU Polling Latency (empty-queue polling cost):
+ *     Queue(Managed)    1.2109 ns/op    - Cached in CPU DRAM after migration
+ *     PinnedQueue       1.5971 ns/op    - Already in host DRAM
+ *     GdrQueue          1474.5264 ns/op - PCIe BAR1 round-trip to GPU VRAM
  *
  *   Concurrent (GPU push + CPU pop simultaneously):
- *     GdrQueue          12.5 us/op     - No page migration, predictable latency
- *     PinnedQueue       14.1 us/op     - No migration, but slow GPU writes
- *     Queue(Managed)    15.1 us/op     - Page migration ping-pong overhead
- *
- * Key Insight: GdrQueue wins in concurrent scenarios despite higher CPU polling
- * latency because it avoids page migration thrashing when both GPU and CPU are
- * actively accessing the queue.
+ *     Queue(Managed)    35.6469 us/op   - Page migration overhead amortized
+ *     GdrQueue          42.9353 us/op   - No migration, but BAR1 read latency
+ *     PinnedQueue       44.1361 us/op   - No migration, but slow GPU writes
  */
 
 /**
@@ -225,17 +221,16 @@ struct alignas(kCacheLineSize) Queue {
  *   └─────────────────────┘                    └─────────────────────┘
  *
  * ┌─────────────────────────────────────────────────────────────────────────────┐
- * │                     WHY GDRCOPY IS FASTER THAN MANAGED MEMORY               │
+ * │                      MEMORY ACCESS PATTERNS COMPARISON                      │
  * └─────────────────────────────────────────────────────────────────────────────┘
  *
- *   cudaMallocManaged (Page Faults):           GDRCopy (Direct BAR1 Access):
- *   ────────────────────────────────           ─────────────────────────────
- *   CPU read ──► Page fault!                   CPU read ──► BAR1 ──► GPU VRAM
- *            ──► Trap to driver                         (direct, ~100-200ns)
- *            ──► Migrate page GPU→CPU
- *            ──► Update page tables
- *            ──► Retry access
- *            (~10-100+ µs per fault)
+ *   cudaMallocManaged:                         GDRCopy:
+ *   ──────────────────                         ────────
+ *   GPU Push ──► Local VRAM (fast)             GPU Push ──► Local VRAM (fast)
+ *   CPU Pop  ──► Page migration or cached      CPU Pop  ──► BAR1 read (~1.5µs)
+ *
+ *   Trade-off: Managed memory benefits from caching after migration, while
+ *   GDRCopy has predictable but higher per-access latency via BAR1.
  *
  * ┌─────────────────────────────────────────────────────────────────────────────┐
  * │                           64KB ALIGNMENT HANDLING                           │
@@ -253,12 +248,11 @@ struct alignas(kCacheLineSize) Queue {
  *
  *   h_buffer = map_ptr + (d_buffer - info.va)
  *
- * Usage: Allocate with cudaMallocManaged + placement new so GPU can access
- *        the queue struct itself (for d_buffer pointer):
+ * Usage:
  *
- *   GdrQueue<int>* queue;
- *   cudaMallocManaged(&queue, sizeof(GdrQueue<int>));
- *   new (queue) GdrQueue<int>(size);
+ *   GdrQueue<int>* queue = new GdrQueue<int>(size);
+ *   // ... use queue ...
+ *   delete queue;
  */
 template <typename T>
 struct alignas(kCacheLineSize) GdrQueue {

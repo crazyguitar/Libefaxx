@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <device/common.cuh>
 #include <mutex>
 #include <queue/queue.cuh>
 #include <thread>
@@ -28,51 +29,25 @@
     }                                                                          \
   } while (0)
 
-#define LAUNCH_KERNEL(cfg, kernel, ...) CUDA_CHECK(cudaLaunchKernelEx(cfg, kernel, ##__VA_ARGS__))
-
 template <typename T>
 struct QueueAlloc {
   static constexpr const char* Name = "Queue(Managed)";
-  static Queue<T>* Create(size_t size) {
-    Queue<T>* q;
-    CUDA_CHECK(cudaMallocManaged(&q, sizeof(Queue<T>)));
-    new (q) Queue<T>(size);
-    return q;
-  }
-  static void Destroy(Queue<T>* q) {
-    q->~Queue<T>();
-    CUDA_CHECK(cudaFree(q));
-  }
+  static Queue<T>* Create(size_t size) { return new Queue<T>(size); }
+  static void Destroy(Queue<T>* q) { delete q; }
 };
 
 template <typename T>
 struct GdrQueueAlloc {
   static constexpr const char* Name = "GdrQueue";
-  static GdrQueue<T>* Create(size_t size) {
-    GdrQueue<T>* q;
-    CUDA_CHECK(cudaMallocManaged(&q, sizeof(GdrQueue<T>)));
-    new (q) GdrQueue<T>(size);
-    return q;
-  }
-  static void Destroy(GdrQueue<T>* q) {
-    q->~GdrQueue<T>();
-    CUDA_CHECK(cudaFree(q));
-  }
+  static GdrQueue<T>* Create(size_t size) { return new GdrQueue<T>(size); }
+  static void Destroy(GdrQueue<T>* q) { delete q; }
 };
 
 template <typename T>
 struct PinnedQueueAlloc {
   static constexpr const char* Name = "PinnedQueue";
-  static PinnedQueue<T>* Create(size_t size) {
-    PinnedQueue<T>* q;
-    CUDA_CHECK(cudaMallocManaged(&q, sizeof(PinnedQueue<T>)));
-    new (q) PinnedQueue<T>(size);
-    return q;
-  }
-  static void Destroy(PinnedQueue<T>* q) {
-    q->~PinnedQueue<T>();
-    CUDA_CHECK(cudaFree(q));
-  }
+  static PinnedQueue<T>* Create(size_t size) { return new PinnedQueue<T>(size); }
+  static void Destroy(PinnedQueue<T>* q) { delete q; }
 };
 
 // =============================================================================
@@ -410,11 +385,13 @@ inline bool HostPush(PinnedQueue<T>* queue, const T& data) {
 }
 
 /**
- * CPU Polling Latency: Pure CPU read speed (no GPU involvement)
+ * CPU Polling Latency: Measures Pop() call overhead (mostly failed pops)
  *
  *   ┌───────┐  pre-fill 1 item  ┌───────┐  pop() x 100K  ┌─────────┐
  *   │ Setup │ ────────────────► │ Queue │ ──────────────► │ Measure │
  *   └───────┘                   └───────┘                 └─────────┘
+ *
+ *   Note: Only first pop succeeds; measures empty-queue polling cost.
  */
 template <typename Q, typename Alloc>
 void BenchPolling() {
