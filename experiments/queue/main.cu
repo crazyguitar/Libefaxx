@@ -1,6 +1,11 @@
 /**
  * @file main.cu
- * @brief MPSC Queue Benchmark - GPU producer, CPU consumer
+ * @brief MPMC Queue Benchmark - GPU producer, CPU consumer
+ *
+ * Benchmarks three queue implementations:
+ *   - Queue(Managed):  cudaMallocManaged - unified memory with page migration
+ *   - PinnedQueue:     cudaHostAlloc + cudaHostGetDevicePointer - GPU writes over PCIe
+ *   - GdrQueue:        GDRCopy - GPU memory with CPU access via PCIe BAR1
  */
 #include <affinity/affinity.h>
 #include <affinity/taskset.h>
@@ -147,9 +152,9 @@ struct alignas(8) Payload {
   uint8_t data[N];
 };
 
-template <typename T>
+template <typename Q>
 struct BenchContext {
-  Queue<T>* queue;
+  Q* queue;
   uint64_t* posted;
   uint64_t* completed;
 };
@@ -159,7 +164,7 @@ template <typename T>
 __device__ __forceinline__ void DevicePush(BenchContext<T> ctx) {
   __threadfence_system();
   if (threadIdx.x == 0) {
-    T payload{};
+    typename T::value_type payload{};
     while (!ctx.queue->Push(payload)) __threadfence_system();
     atomicAdd(reinterpret_cast<unsigned long long*>(ctx.posted), 1ULL);
     Fence();
@@ -173,7 +178,7 @@ template <typename T>
 __device__ __forceinline__ void DevicePushNBI(BenchContext<T> ctx) {
   __threadfence_system();
   if (threadIdx.x == 0) {
-    T payload{};
+    typename T::value_type payload{};
     while (!ctx.queue->Push(payload)) __threadfence_system();
     atomicAdd(reinterpret_cast<unsigned long long*>(ctx.posted), 1ULL);
     Fence();
@@ -195,14 +200,42 @@ __global__ void PushNBIKernel(BenchContext<T> ctx, int iters) {
   __syncthreads();
 }
 
+// Queue allocation traits
+template <typename Q>
+struct QueueTraits;
+
 template <typename T>
+struct QueueTraits<Queue<T>> {
+  static constexpr const char* Name = "Queue(Managed)";
+  static Queue<T>* Alloc() { return new Queue<T>(); }
+  static void Free(Queue<T>* q) { delete q; }
+};
+
+template <typename T>
+struct QueueTraits<PinnedQueue<T>> {
+  static constexpr const char* Name = "PinnedQueue";
+  static PinnedQueue<T>* Alloc() { return new PinnedQueue<T>(); }
+  static void Free(PinnedQueue<T>* q) { delete q; }
+};
+
+template <typename T>
+struct QueueTraits<GdrQueue<T>> {
+  static constexpr const char* Name = "GdrQueue";
+  static GdrQueue<T>* Alloc() { return new GdrQueue<T>(); }
+  static void Free(GdrQueue<T>* q) { delete q; }
+};
+
+template <typename Q>
 struct Bench {
-  Queue<T> queue;
+  using T = typename Q::value_type;
+  using Traits = QueueTraits<Q>;
+  Q* queue;
   uint64_t* posted;
   uint64_t* completed;
   cudaStream_t stream;
 
   Bench() {
+    queue = Traits::Alloc();
     CUDA_CHECK(cudaMallocManaged(&posted, sizeof(uint64_t)));
     CUDA_CHECK(cudaMallocManaged(&completed, sizeof(uint64_t)));
     CUDA_CHECK(cudaStreamCreate(&stream));
@@ -211,12 +244,13 @@ struct Bench {
   }
 
   ~Bench() {
+    Traits::Free(queue);
     CUDA_CHECK(cudaFree(posted));
     CUDA_CHECK(cudaFree(completed));
     CUDA_CHECK(cudaStreamDestroy(stream));
   }
 
-  BenchContext<T> GetContext() { return {&queue, posted, completed}; }
+  BenchContext<Q> GetContext() { return {queue, posted, completed}; }
 
   void Complete() { reinterpret_cast<cuda::std::atomic<uint64_t>*>(completed)->fetch_add(1, cuda::std::memory_order_relaxed); }
 
@@ -233,14 +267,14 @@ struct Bench {
     ::Run([&]() -> Coro<> {
       for (int done = 0; done < iters;) {
         T item;
-        if (queue.Pop(item)) {
+        if (queue->Pop(item)) {
           Complete();
           ++done;
           if (done == 1 || done % 64 == 0) {
             auto now = std::chrono::high_resolution_clock::now();
             double elapsed = std::chrono::duration<double>(now - start).count();
             double lat = std::chrono::duration<double, std::micro>(now - start).count() / done;
-            printf("\r[%.3fs] ops=%d/%d size=%zu lat=%.3fus\033[K", elapsed, done, iters, sizeof(T), lat);
+            printf("\r[%s] [%.3fs] ops=%d/%d size=%zu lat=%.3fus\033[K", Traits::Name, elapsed, done, iters, sizeof(T), lat);
             fflush(stdout);
           }
         }
@@ -264,16 +298,17 @@ struct BenchResultPair {
   BenchResult nbi;
 };
 
-template <typename T>
+template <typename Q>
 BenchResultPair RunBench(const Options& opts) {
-  Bench<T> bench;
+  using T = typename Q::value_type;
+  Bench<Q> bench;
   // Warmup
-  for (int i = 0; i < opts.warmup; ++i) bench.Run(PushKernel<T>, opts.iters);
+  for (int i = 0; i < opts.warmup; ++i) bench.Run(PushKernel<Q>, opts.iters);
 
   // Blocking benchmark
   BenchResult blocking{sizeof(T), 0, 0};
   for (int i = 0; i < opts.repeat; ++i) {
-    auto r = bench.Run(PushKernel<T>, opts.iters);
+    auto r = bench.Run(PushKernel<Q>, opts.iters);
     blocking.time_us += r.time_us;
     blocking.mops += r.mops;
   }
@@ -283,7 +318,7 @@ BenchResultPair RunBench(const Options& opts) {
   // NBI benchmark
   BenchResult nbi{sizeof(T), 0, 0};
   for (int i = 0; i < opts.repeat; ++i) {
-    auto r = bench.Run(PushNBIKernel<T>, opts.iters);
+    auto r = bench.Run(PushNBIKernel<Q>, opts.iters);
     nbi.time_us += r.time_us;
     nbi.mops += r.mops;
   }
@@ -291,19 +326,6 @@ BenchResultPair RunBench(const Options& opts) {
   nbi.mops /= opts.repeat;
 
   return {sizeof(T), blocking, nbi};
-}
-
-void PrintSummary(const char* title, const Options& opts, const std::vector<BenchResultPair>& results) {
-  printf("#\n# %s\n#\n", title);
-  printf("# iters per run: %d\n", opts.iters);
-  printf("# repeat: %d\n", opts.repeat);
-  printf("# warmup: %d\n#\n", opts.warmup);
-  printf("# Pattern: GPU -> Queue -> CPU\n#\n");
-  printf("%12s %14s %10s %14s %10s\n", "size", "Blocking", "Lat(us)", "NBI", "Lat(us)");
-  for (const auto& r : results) {
-    printf("%12zu %14.2f %10.2f %14.2f %10.2f\n", r.size, r.blocking.mops, r.blocking.time_us, r.nbi.mops, r.nbi.time_us);
-  }
-  printf("#\n# Benchmark complete.\n");
 }
 
 int main(int argc, char* argv[]) {
@@ -321,18 +343,61 @@ int main(int argc, char* argv[]) {
   Test test;
   test.Run(opts.warmup);
 
-  printf("Running Bench...\n");
-  fflush(stdout);
+  // Queue (Managed)
+  std::vector<BenchResultPair> managed;
+  managed.push_back(RunBench<Queue<Payload<8>>>(opts));
+  managed.push_back(RunBench<Queue<Payload<16>>>(opts));
+  managed.push_back(RunBench<Queue<Payload<32>>>(opts));
+  managed.push_back(RunBench<Queue<Payload<64>>>(opts));
+  managed.push_back(RunBench<Queue<Payload<128>>>(opts));
+  managed.push_back(RunBench<Queue<Payload<256>>>(opts));
+  managed.push_back(RunBench<Queue<Payload<512>>>(opts));
+  managed.push_back(RunBench<Queue<Payload<1024>>>(opts));
 
-  std::vector<BenchResultPair> results;
-  results.push_back(RunBench<Payload<8>>(opts));
-  results.push_back(RunBench<Payload<16>>(opts));
-  results.push_back(RunBench<Payload<32>>(opts));
-  results.push_back(RunBench<Payload<64>>(opts));
-  results.push_back(RunBench<Payload<128>>(opts));
-  results.push_back(RunBench<Payload<256>>(opts));
-  results.push_back(RunBench<Payload<512>>(opts));
-  results.push_back(RunBench<Payload<1024>>(opts));
+  // PinnedQueue
+  std::vector<BenchResultPair> pinned;
+  pinned.push_back(RunBench<PinnedQueue<Payload<8>>>(opts));
+  pinned.push_back(RunBench<PinnedQueue<Payload<16>>>(opts));
+  pinned.push_back(RunBench<PinnedQueue<Payload<32>>>(opts));
+  pinned.push_back(RunBench<PinnedQueue<Payload<64>>>(opts));
+  pinned.push_back(RunBench<PinnedQueue<Payload<128>>>(opts));
+  pinned.push_back(RunBench<PinnedQueue<Payload<256>>>(opts));
+  pinned.push_back(RunBench<PinnedQueue<Payload<512>>>(opts));
+  pinned.push_back(RunBench<PinnedQueue<Payload<1024>>>(opts));
 
-  PrintSummary("MPSC Queue Benchmark", opts, results);
+  // GdrQueue
+  std::vector<BenchResultPair> gdr;
+  gdr.push_back(RunBench<GdrQueue<Payload<8>>>(opts));
+  gdr.push_back(RunBench<GdrQueue<Payload<16>>>(opts));
+  gdr.push_back(RunBench<GdrQueue<Payload<32>>>(opts));
+  gdr.push_back(RunBench<GdrQueue<Payload<64>>>(opts));
+  gdr.push_back(RunBench<GdrQueue<Payload<128>>>(opts));
+  gdr.push_back(RunBench<GdrQueue<Payload<256>>>(opts));
+  gdr.push_back(RunBench<GdrQueue<Payload<512>>>(opts));
+  gdr.push_back(RunBench<GdrQueue<Payload<1024>>>(opts));
+
+  // Print grouped summary by mode
+  printf("\n#\n# Summary: Blocking Mode (sync after each push)\n#\n");
+  printf("# iters per run: %d, repeat: %d, warmup: %d\n", opts.iters, opts.repeat, opts.warmup);
+  printf("# Pattern: GPU -> Queue -> CPU\n#\n");
+  printf("%12s %14s %10s %14s %10s %14s %10s\n", "size", "Managed", "Lat(us)", "Pinned", "Lat(us)", "GdrQueue", "Lat(us)");
+  for (size_t i = 0; i < managed.size(); ++i) {
+    printf(
+        "%12zu %14.2f %10.2f %14.2f %10.2f %14.2f %10.2f\n", managed[i].size, managed[i].blocking.mops, managed[i].blocking.time_us,
+        pinned[i].blocking.mops, pinned[i].blocking.time_us, gdr[i].blocking.mops, gdr[i].blocking.time_us
+    );
+  }
+
+  printf("\n#\n# Summary: NBI Mode (batch push, sync at end)\n#\n");
+  printf("# iters per run: %d, repeat: %d, warmup: %d\n", opts.iters, opts.repeat, opts.warmup);
+  printf("# Pattern: GPU -> Queue -> CPU\n#\n");
+  printf("%12s %14s %10s %14s %10s %14s %10s\n", "size", "Managed", "Lat(us)", "Pinned", "Lat(us)", "GdrQueue", "Lat(us)");
+  for (size_t i = 0; i < managed.size(); ++i) {
+    printf(
+        "%12zu %14.2f %10.2f %14.2f %10.2f %14.2f %10.2f\n", managed[i].size, managed[i].nbi.mops, managed[i].nbi.time_us, pinned[i].nbi.mops,
+        pinned[i].nbi.time_us, gdr[i].nbi.mops, gdr[i].nbi.time_us
+    );
+  }
+
+  printf("#\n# Benchmark complete.\n");
 }

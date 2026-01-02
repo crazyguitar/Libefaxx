@@ -46,7 +46,8 @@ void shmem_proxy(void* ptr, int send_count, int recv_count) {
   }());
 }
 
-__global__ void simple_shift(DeviceContext ctx, int* __restrict__ target, int mype, int npes) {
+template <typename Ctx>
+__global__ void simple_shift(Ctx ctx, int* __restrict__ target, int mype, int npes) {
   int peer = (mype + 1) % npes;
   shmem_int_p(ctx, target, mype, peer);
 }
@@ -60,10 +61,10 @@ int main(int argc, char* argv[]) {
   CUDA_CHECK(cudaSetDevice(MPI::Get().GetLocalRank()));
 
   int* target = static_cast<int*>(shmem_malloc(sizeof(int)));
-  DeviceContext ctx = shmem_ctx(target);
+  auto ctx = shmem_ctx(target);
 
   cudaLaunchConfig_t cfg{.gridDim = {1, 1, 1}, .blockDim = {1, 1, 1}};
-  LAUNCH_KERNEL(&cfg, simple_shift, ctx, target, mype, npes);
+  LAUNCH_KERNEL(&cfg, simple_shift<decltype(ctx)>, ctx, target, mype, npes);
 
   shmem_proxy(target, 1, 1);
 

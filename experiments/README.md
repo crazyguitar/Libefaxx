@@ -216,6 +216,64 @@ Source code: [proxy.cuh](https://github.com/crazyguitar/Libefaxx/blob/main/src/i
     v           v            v            |
 ```
 
+### Command Queue Implementation Comparison
+
+This section compares three queue implementations for GPU-CPU communication:
+`cudaMallocManaged` (unified memory), `cudaHostAlloc + cudaHostGetDevicePointer`
+(pinned host memory), and `GDRCopy` (GPU memory with BAR1 mapping). The command
+queue serves as the communication channel between GPU threads and the CPU proxy,
+where GPU kernels push RDMA commands and the CPU thread polls and executes them.
+Choosing the right queue implementation significantly impacts end-to-end latency
+and throughput.
+
+**Unified Memory Latency Growth:** `cudaMallocManaged` exhibits latency that
+scales with message size due to CUDA's page migration mechanism. In blocking
+mode, each `Quiet` operation forces a synchronization point where the GPU must
+wait for the CPU to acknowledge completion. During this wait, unified memory
+pages containing the command queue are migrated between GPU and CPU memory on
+each push-pop cycle. As payload size increases, more pages must be migrated per
+operation, directly increasing latency. In contrast, `PinnedQueue` (host memory
+with GPU device pointer) and `GdrQueue` (GPU memory with CPU BAR1 mapping)
+maintain fixed memory locations—no page migration occurs regardless of payload
+size, resulting in stable latency.
+
+**NBI Amortization:** With non-blocking interface (NBI), the GPU pipelines
+multiple push operations before issuing a single `Quiet` at the end. This
+amortizes the page migration cost across many operations: pages migrate once
+per batch rather than once per operation. The pipelining also allows the unified
+memory driver to optimize page placement, reducing thrashing. This explains why
+`cudaMallocManaged` with NBI shows minimal latency growth and can outperform
+other implementations in some cases—the batched access pattern aligns well with
+unified memory's design for bulk transfers rather than fine-grained
+synchronization.
+
+![queue](imgs/queue.png)
+
+### Queue Performance with RDMA Operations
+
+When combined with RDMA operations through the Proxy thread, queue
+implementation differences become more pronounced. The figures below compare
+queue performance in both blocking mode (SingleBlocking, MultiBlocking) and
+non-blocking mode (SingleNBI, MultiNBI) across different message sizes.
+
+**Blocking Mode:** `cudaMallocManaged` exhibits worse performance for small
+writes compared to `PinnedQueue` and `GdrQueue`. The performance degradation
+stems from page migration overhead amplified by RDMA operations—each `Quiet`
+not only triggers page migration for the command queue, but also serializes
+the RDMA completion path. For small writes, the page migration latency
+dominates the total transfer time, making `cudaMallocManaged` significantly
+slower than alternatives with fixed memory locations.
+
+**NBI Mode:** SingleNBI shows no obvious difference across implementations
+because the single-EFA configuration is already bottlenecked by network latency
+rather than queue access. However, MultiNBI reveals that `cudaMallocManaged`
+still underperforms compared to other queue implementations. When four EFAs
+operate in parallel, the aggregate command latency decreases, and the page
+migration overhead of `cudaMallocManaged` becomes the limiting factor,
+preventing utilization of the available network bandwidth.
+
+![proxy_queue](imgs/proxy_queue.png)
+
 ## NVLink GPU-to-GPU Communication Performance
 
 NVLink is NVIDIA's high-bandwidth interconnect for direct GPU-to-GPU

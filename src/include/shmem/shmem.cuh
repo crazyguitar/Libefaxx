@@ -90,7 +90,7 @@ inline void shmem_free(void* ptr) { shmem::detail::g_allocs.erase(ptr); }
  * @param ptr Pointer returned by shmem_malloc
  * @return DeviceContext for GPU kernel access
  */
-[[nodiscard]] inline DeviceContext shmem_ctx(void* ptr) noexcept { return shmem::detail::g_allocs.at(ptr)->GetContext(); }
+[[nodiscard]] inline auto shmem_ctx(void* ptr) noexcept { return shmem::detail::g_allocs.at(ptr)->GetContext(); }
 
 /**
  * @brief Global barrier across all PEs
@@ -120,7 +120,10 @@ __device__ __forceinline__ void shmem_fence() { Fence(); }
  * @brief Device quiet - wait for all outstanding operations to complete
  * @param ctx Device context from shmem_ctx
  */
-__device__ __forceinline__ void shmem_quiet(DeviceContext ctx) { Quiet(ctx.posted, ctx.completed); }
+template <typename Ctx>
+__device__ __forceinline__ void shmem_quiet(Ctx ctx) {
+  Quiet(ctx.posted, ctx.completed);
+}
 
 /**
  * @brief Template put a single value to remote PE (non-blocking)
@@ -130,8 +133,8 @@ __device__ __forceinline__ void shmem_quiet(DeviceContext ctx) { Quiet(ctx.poste
  * @param value Value to write
  * @param pe Target PE index
  */
-template <typename T>
-__device__ __forceinline__ void shmem_p_nbi(const DeviceContext ctx, T* __restrict__ dest, const T value, const int pe) {
+template <typename Ctx, typename T>
+__device__ __forceinline__ void shmem_p_nbi(const Ctx ctx, T* __restrict__ dest, const T value, const int pe) {
   if (ctx.ipc_ptrs[pe]) {
     // Intra-node: Direct IPC memory access
     static_cast<T*>(ctx.ipc_ptrs[pe])[0] = value;
@@ -160,16 +163,22 @@ __device__ __forceinline__ void shmem_p_nbi(const DeviceContext ctx, T* __restri
  * @param value Value to write
  * @param pe Target PE index
  */
-template <typename T>
-__device__ __forceinline__ void shmem_p(DeviceContext ctx, T* __restrict__ dest, T value, int pe) {
+template <typename Ctx, typename T>
+__device__ __forceinline__ void shmem_p(Ctx ctx, T* __restrict__ dest, T value, int pe) {
   shmem_p_nbi(ctx, dest, value, pe);
   shmem_quiet(ctx);
 }
 
 // Type-specific wrappers via macro
-#define SHMEM_TYPE_P_IMPL(NAME, TYPE)                                                                                                    \
-  __device__ __forceinline__ void shmem_##NAME##_p(DeviceContext ctx, TYPE* dest, TYPE value, int pe) { shmem_p(ctx, dest, value, pe); } \
-  __device__ __forceinline__ void shmem_##NAME##_p_nbi(DeviceContext ctx, TYPE* dest, TYPE value, int pe) { shmem_p_nbi(ctx, dest, value, pe); }
+#define SHMEM_TYPE_P_IMPL(NAME, TYPE)                                                             \
+  template <typename Ctx>                                                                         \
+  __device__ __forceinline__ void shmem_##NAME##_p(Ctx ctx, TYPE* dest, TYPE value, int pe) {     \
+    shmem_p(ctx, dest, value, pe);                                                                \
+  }                                                                                               \
+  template <typename Ctx>                                                                         \
+  __device__ __forceinline__ void shmem_##NAME##_p_nbi(Ctx ctx, TYPE* dest, TYPE value, int pe) { \
+    shmem_p_nbi(ctx, dest, value, pe);                                                            \
+  }
 
 SHMEM_TYPE_P_IMPL(char, char)
 SHMEM_TYPE_P_IMPL(schar, signed char)

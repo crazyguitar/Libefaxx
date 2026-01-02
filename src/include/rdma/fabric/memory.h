@@ -22,8 +22,9 @@
  * enabling symmetric memory access patterns like NVSHMEM/OpenSHMEM.
  *
  * @tparam BufferType The underlying buffer type (DeviceDMABuffer, DevicePinBuffer, or HostBuffer)
+ * @tparam QueueType The queue type for GPU-CPU communication (Queue, PinnedQueue, or GdrQueue)
  */
-template <typename BufferType>
+template <typename BufferType, typename QueueType = Queue<DeviceRequest>>
 class SymmetricMemory : public BufferType {
  public:
   /**
@@ -201,7 +202,7 @@ class SymmetricMemory : public BufferType {
   }
 
   /** @brief Get queue pointer for CUDA kernel access */
-  [[nodiscard]] Queue<DeviceRequest>* GetQueue() noexcept { return &queue_; }
+  [[nodiscard]] QueueType* GetQueue() noexcept { return &queue_; }
 
   /** @brief Get posted counter pointer for CUDA kernel access */
   [[nodiscard]] uint64_t* GetPosted() noexcept { return posted_; }
@@ -210,7 +211,7 @@ class SymmetricMemory : public BufferType {
   [[nodiscard]] uint64_t* GetCompleted() noexcept { return completed_; }
 
   /** @brief Get device context for CUDA kernel access */
-  [[nodiscard]] DeviceContext GetContext() noexcept {
+  [[nodiscard]] DeviceContext<QueueType> GetContext() noexcept {
     if constexpr (std::is_same_v<BufferType, DeviceDMABuffer>) {
       return {&queue_, posted_, completed_, ipc_ptrs_};
     } else {
@@ -242,7 +243,7 @@ class SymmetricMemory : public BufferType {
  private:
   int world_size_;                                 ///< Number of ranks in the world
   std::vector<std::vector<fi_rma_iov>> rma_iovs_;  ///< 2D RMA IOVs: [rank][channel]
-  Queue<DeviceRequest> queue_;                     ///< GPU request queue
+  QueueType queue_;                                ///< GPU request queue
   uint64_t* posted_ = nullptr;                     ///< Posted operations counter (managed memory)
   uint64_t* completed_ = nullptr;                  ///< Completed operations counter (managed memory)
 
@@ -252,10 +253,16 @@ class SymmetricMemory : public BufferType {
 };
 
 /** @brief Symmetric memory with DMABUF for GPU direct access */
-using SymmetricDMAMemory = SymmetricMemory<DeviceDMABuffer>;
+template <typename QueueType = Queue<DeviceRequest>>
+using SymmetricDMAMemoryT = SymmetricMemory<DeviceDMABuffer, QueueType>;
+using SymmetricDMAMemory = SymmetricDMAMemoryT<>;
 
 /** @brief Symmetric memory with pinned host memory */
-using SymmetricPinMemory = SymmetricMemory<DevicePinBuffer>;
+template <typename QueueType = Queue<DeviceRequest>>
+using SymmetricPinMemoryT = SymmetricMemory<DevicePinBuffer, QueueType>;
+using SymmetricPinMemory = SymmetricPinMemoryT<>;
 
 /** @brief Symmetric memory with host memory */
-using SymmetricHostMemory = SymmetricMemory<HostBuffer>;
+template <typename QueueType = Queue<DeviceRequest>>
+using SymmetricHostMemoryT = SymmetricMemory<HostBuffer, QueueType>;
+using SymmetricHostMemory = SymmetricHostMemoryT<>;
