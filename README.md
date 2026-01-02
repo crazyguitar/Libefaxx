@@ -135,7 +135,7 @@ See [CITATION.cff](CITATION.cff) for machine-readable citation information.
 
 ### BibTeX
 ```bibtex
-@software{tsai2025aws_efa_gpu_benchmark,
+@software{tsai2026aws_efa_gpu_benchmark,
   title = {AWS EFA GPU Benchmark},
   author = {Tsai, Chang-Ning},
   year = {2026},
