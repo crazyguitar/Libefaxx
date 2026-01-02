@@ -387,7 +387,7 @@ inline bool HostPush(PinnedQueue<T>* queue, const T& data) {
 /**
  * CPU Polling Latency: Measures Pop() call overhead (mostly failed pops)
  *
- *   ┌───────┐  pre-fill 1 item  ┌───────┐  pop() x 100K  ┌─────────┐
+ *   ┌───────┐  pre-fill 1 item  ┌───────┐  pop() x 100K   ┌─────────┐
  *   │ Setup │ ────────────────► │ Queue │ ──────────────► │ Measure │
  *   └───────┘                   └───────┘                 └─────────┘
  *
@@ -419,10 +419,10 @@ void BenchPolling() {
  *   ┌─────────────────────────────────────────────────────────────┐
  *   │                    Time ──────────────────►                 │
  *   │                                                             │
- *   │  GPU:  ┌─push─┬─push─┬─push─┬─push─┬─ ─ ─►                 │
+ *   │  GPU:  ┌─push─┬─push─┬─push─┬─push─┬─ ─ ─►                  │
  *   │        └──────┴──────┴──────┴──────┘                        │
  *   │                  ▼ data visible                             │
- *   │  CPU:      ┌─pop─┬─pop─┬─pop─┬─pop─┬─ ─ ─►                 │
+ *   │  CPU:      ┌─pop─┬─pop─┬─pop─┬─pop─┬─ ─ ─►                  │
  *   │            └─────┴─────┴─────┴─────┘                        │
  *   └─────────────────────────────────────────────────────────────┘
  */
