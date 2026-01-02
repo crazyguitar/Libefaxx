@@ -3,6 +3,8 @@
  * @brief Comprehensive unit tests for src/include/io components
  */
 
+#include <affinity/affinity.h>
+#include <affinity/taskset.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <io/client.h>
@@ -1863,6 +1865,10 @@ void TestCoroDelayedServerStartWithClientRetry() {
 // Main
 // =============================================================================
 int main() {
+  auto& loc = GPUloc::Get();
+  auto& affinity = loc.GetGPUAffinity()[0];
+  Taskset::Set(affinity.cores[0]->logical_index);
+
   printf("=== IO Unit Tests ===\n\n");
 
   // defer.h

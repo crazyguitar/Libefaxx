@@ -13,3 +13,6 @@ clean:
 
 format:
 	find . -type f -name "*.cu" -o -name "*.h" -o -name "*.cuh"| xargs -I{} clang-format -style=file -i {}
+
+test:
+	./build/tests/io/io_test && ./build/tests/queue/queue_test

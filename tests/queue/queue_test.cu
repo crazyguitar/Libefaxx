@@ -9,6 +9,8 @@
  *
  * See flow charts above each benchmark function for detailed operation.
  */
+#include <affinity/affinity.h>
+#include <affinity/taskset.h>
 #include <cuda.h>
 #include <spdlog/spdlog.h>
 
@@ -505,6 +507,10 @@ void RunBenchmarks() {
 // =============================================================================
 int main(int argc, char* argv[]) {
   CUDA_CHECK(cudaSetDevice(0));
+
+  auto& loc = GPUloc::Get();
+  auto& affinity = loc.GetGPUAffinity()[0];
+  Taskset::Set(affinity.cores[0]->logical_index);
 
   printf("=== Queue (Managed) Tests ===\n\n");
   RunAllTests<Queue<int>, QueueAlloc<int>>();
