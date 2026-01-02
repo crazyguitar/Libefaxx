@@ -138,17 +138,17 @@ See [CITATION.cff](CITATION.cff) for machine-readable citation information.
 @software{tsai2025aws_efa_gpu_benchmark,
   title = {AWS EFA GPU Benchmark},
   author = {Tsai, Chang-Ning},
-  year = {2025},
-  month = {12},
+  year = {2026},
+  month = {1},
   url = {https://github.com/crazyguitar/Libefaxx},
-  version = {0.2.9},
+  version = {0.3.0},
   abstract = {High-performance RDMA communication experiments using CUDA and Amazon Elastic Fabric Adapter (EFA)},
   keywords = {RDMA, CUDA, EFA, High-Performance Computing, GPU Communication, Amazon EFA, Fabric, MPI}
 }
 ```
 
 ### APA Style
-Tsai, C.-N. (2025). *AWS EFA GPU Benchmark* (Version 0.2.9) [Computer software]. https://github.com/crazyguitar/Libefaxx
+Tsai, C.-N. (2026). *AWS EFA GPU Benchmark* (Version 0.3.0) [Computer software]. https://github.com/crazyguitar/Libefaxx
 
 ## References
 
