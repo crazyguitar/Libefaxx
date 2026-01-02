@@ -299,7 +299,7 @@ dimensions (threads per block) have minimal impact. This behavior reflects
 NVLink's ability to handle many small transactions efficiently when sufficient
 parallelism is available.
 
-**Benchmark Results ([IPC](ipc)):**
+**Benchmark Results:**
 - 1×256 grid: ~350 Gbps (9% peak) — insufficient parallelism to saturate NVLink
 - 128×256 grid: ~2971 Gbps (78% peak) — near-optimal utilization
 
