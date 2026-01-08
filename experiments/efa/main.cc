@@ -1,5 +1,5 @@
 #include <rdma/fabric/efa.h>
-#include <rdma/verb/efa.h>
+#include <rdma/ib/efa.h>
 #include <iostream>
 
 int main(int argc, char *argv[]) {

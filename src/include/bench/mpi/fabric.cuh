@@ -189,11 +189,11 @@ struct NoVerify {
  * @tparam F Communication functor (e.g., All2all)
  * @tparam V Verification functor (VerifyGPU or VerifyCPU)
  */
-class FabricBench : public Peer {
+class FabricBench : public fi::Peer {
  public:
   cudaStream_t stream;
 
-  FabricBench() : Peer() {
+  FabricBench() : fi::Peer() {
     CUDA_CHECK(cudaSetDevice(device));
     CUDA_CHECK(cudaStreamCreate(&stream));
   }

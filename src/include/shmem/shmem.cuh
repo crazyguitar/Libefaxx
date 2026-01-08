@@ -15,7 +15,7 @@
 
 namespace shmem::detail {
 
-inline std::unique_ptr<Peer> g_peer;
+inline std::unique_ptr<fi::Peer> g_peer;
 inline std::unordered_map<void*, std::unique_ptr<SymmetricDMAMemory>> g_allocs;
 
 }  // namespace shmem::detail
@@ -24,7 +24,7 @@ inline std::unordered_map<void*, std::unique_ptr<SymmetricDMAMemory>> g_allocs;
  * @brief Initialize SHMEM with MPI-based bootstrap
  */
 inline void shmem_init() {
-  shmem::detail::g_peer = std::make_unique<Peer>();
+  shmem::detail::g_peer = std::make_unique<fi::Peer>();
   shmem::detail::g_peer->Exchange();
   shmem::detail::g_peer->Connect();
 }
@@ -105,9 +105,9 @@ inline void shmem_barrier_all() noexcept { MPI_Barrier(MPI_COMM_WORLD); }
 
 /**
  * @brief Get peer object
- * @return Reference to Peer
+ * @return Reference to fi::Peer
  */
-[[nodiscard]] inline Peer& shmem_peer() noexcept { return *shmem::detail::g_peer; }
+[[nodiscard]] inline fi::Peer& shmem_peer() noexcept { return *shmem::detail::g_peer; }
 
 #ifdef __CUDACC__
 
