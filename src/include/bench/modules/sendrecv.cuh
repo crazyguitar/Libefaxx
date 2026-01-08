@@ -19,11 +19,11 @@ struct SendRecv {
   template <typename T>
   void operator()(Peer& peer, typename Peer::template Buffers<T>& send, typename Peer::template Buffers<T>& recv) {
     if (peer.mpi.GetWorldRank() != 0) return;
-    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<fi::FabricSelector>(efa);
     Run([&]() -> Coro<> {
       co_await send[target]->Sendall(channel);
       co_await recv[target]->Recvall(channel);
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<fi::FabricSelector>(efa);
     }());
   }
 };
@@ -39,11 +39,11 @@ struct RecvSend {
   template <typename T>
   void operator()(Peer& peer, typename Peer::template Buffers<T>& send, typename Peer::template Buffers<T>& recv) {
     if (peer.mpi.GetWorldRank() != target) return;
-    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<fi::FabricSelector>(efa);
     Run([&]() -> Coro<> {
       co_await recv[0]->Recvall(channel);
       co_await send[0]->Sendall(channel);
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<fi::FabricSelector>(efa);
     }());
   }
 };

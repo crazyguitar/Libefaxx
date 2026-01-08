@@ -13,6 +13,8 @@
 #include <rdma/fabric/selector.h>
 #include <rdma/fi_rma.h>
 
+namespace fi {
+
 /**
  * @brief RDMA channel managing GPU memory registration and remote peer connection
  *
@@ -393,3 +395,5 @@ class Channel : private NoCopy {
   EFA* efa_ = nullptr;
   fi_addr_t remote_ = FI_ADDR_UNSPEC;
 };
+
+}  // namespace fi

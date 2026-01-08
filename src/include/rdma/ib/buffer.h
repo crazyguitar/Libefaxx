@@ -200,4 +200,48 @@ class DeviceDMABuffer : public Buffer {
   int dmabuf_fd_ = -1;
 };
 
+/**
+ * @brief Host memory buffer for RDMA operations using ibverbs
+ */
+class HostBuffer : public Buffer {
+ public:
+  static constexpr size_t kAlign = 128;
+
+  HostBuffer(std::vector<Channel>& channels, int /*device*/, size_t size, size_t align = kAlign) : Buffer(channels, size) {
+    ASSERT(align > 0 && (align & (align - 1)) == 0);
+    raw_ = malloc(size + align - 1);
+    ASSERT(raw_);
+    data_ = Align(raw_, align);
+    mrs_ = Register(channels_, data_, size_);
+  }
+
+  HostBuffer(std::vector<Channel>& channels, size_t size, size_t align = kAlign) : HostBuffer(channels, 0, size, align) {}
+
+  ~HostBuffer() override {
+    for (auto* mr : mrs_) ib_mr_close(mr);
+    mrs_.clear();
+    if (raw_) {
+      free(raw_);
+      raw_ = nullptr;
+    }
+  }
+
+ protected:
+  static ib_mr* Register(Channel& channel, void* __restrict__ data, size_t size) {
+    auto* efa = channel.GetEFA();
+    auto* domain = efa->GetDomain();
+    ib_mr* mr = nullptr;
+    int rc = ib_mr_reg(domain, data, size, IB_MR_LOCAL_READ | IB_MR_REMOTE_WRITE | IB_MR_REMOTE_READ, &mr);
+    if (rc) throw std::runtime_error(fmt::format("ib_mr_reg failed: {}", strerror(-rc)));
+    return mr;
+  }
+
+  static std::vector<ib_mr*> Register(std::vector<Channel>& channels, void* __restrict__ data, size_t size) {
+    std::vector<ib_mr*> mrs;
+    mrs.reserve(channels.size());
+    for (auto& ch : channels) mrs.push_back(Register(ch, data, size));
+    return mrs;
+  }
+};
+
 }  // namespace ib

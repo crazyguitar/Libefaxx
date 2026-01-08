@@ -40,11 +40,10 @@ class Peer : private NoCopy {
     const auto world_size = mpi.GetWorldSize();
     const auto rank = mpi.GetWorldRank();
     device = mpi.GetLocalRank();
-    static bool printed = false;
-    if (rank == 0 && !printed) {
+    if (rank == 0 && !g_device_info_printed) {
       auto& aff = loc.GetGPUAffinity()[device];
       std::cout << fmt::format("CUDA Device {}: \"{}\"\n", device, aff.prop.name) << aff << std::flush;
-      printed = true;
+      g_device_info_printed = true;
     }
     addrs.resize(world_size);
     auto& affinity = loc.GetGPUAffinity()[device];

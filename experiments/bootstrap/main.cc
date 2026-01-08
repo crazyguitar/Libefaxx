@@ -18,7 +18,7 @@ int main(int argc, char *argv[]) {
 
   // Assert addresses match
   for (size_t i = 0; i < fi_peer.efas.size(); ++i) {
-    auto fi_addr = EFA::Addr2Str(fi_peer.efas[i].GetAddr());
+    auto fi_addr = fi::EFA::Addr2Str(fi_peer.efas[i].GetAddr());
     auto ib_addr = ib::EFA::Addr2Str(ib_peer.efas[i].GetAddr());
     SPDLOG_INFO("  efa[{}] fi: {}", i, fi_addr);
     SPDLOG_INFO("  efa[{}] ib: {}", i, ib_addr);

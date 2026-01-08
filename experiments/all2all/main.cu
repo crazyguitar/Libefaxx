@@ -21,10 +21,10 @@ struct All2all {
   int channel = 0;
   template <typename T>
   void operator()(FabricBench& peer, FabricBench::Buffers<T>& write, FabricBench::Buffers<T>& read) {
-    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<fi::FabricSelector>(efa);
     Run([&]() -> Coro<> {
       co_await RunAll2allWrite(write, read, channel, peer.mpi.GetWorldSize(), peer.mpi.GetWorldRank());
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<fi::FabricSelector>(efa);
     }());
   }
 };
@@ -33,10 +33,10 @@ struct All2all {
 struct All2allMulti {
   template <typename T>
   void operator()(FabricBench& peer, FabricBench::Buffers<T>& write, FabricBench::Buffers<T>& read) {
-    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<fi::FabricSelector>(efa);
     Run([&]() -> Coro<> {
       co_await RunAll2allWriteMultiChannel(write, read, peer.mpi.GetWorldSize(), peer.mpi.GetWorldRank());
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<fi::FabricSelector>(efa);
     }());
   }
 };
@@ -45,10 +45,10 @@ struct All2allMulti {
 struct All2allRoundRobin {
   template <typename T>
   void operator()(FabricBench& peer, FabricBench::Buffers<T>& write, FabricBench::Buffers<T>& read) {
-    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<fi::FabricSelector>(efa);
     Run([&]() -> Coro<> {
       co_await RunAll2allWriteRoundRobin(write, read, peer.efas.size(), peer.mpi.GetWorldSize(), peer.mpi.GetWorldRank());
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<fi::FabricSelector>(efa);
     }());
   }
 };
@@ -86,11 +86,11 @@ inline constexpr char kRoundRobinDMA[] = "RoundRobinDMA";
 inline constexpr char kSinglePin[] = "SinglePin";
 inline constexpr char kMultiPin[] = "MultiPin";
 
-using SingleDMA = Test<kSingleDMA, SymmetricDMAMemory, All2all, SingleLinkBW>;
-using MultiDMA = Test<kMultiDMA, SymmetricDMAMemory, All2allMulti, TotalLinkBW>;
-using RoundRobinDMA = Test<kRoundRobinDMA, SymmetricDMAMemory, All2allRoundRobin, TotalLinkBW>;
-using SinglePin = Test<kSinglePin, SymmetricPinMemory, All2all, SingleLinkBW>;
-using MultiPin = Test<kMultiPin, SymmetricPinMemory, All2allMulti, TotalLinkBW>;
+using SingleDMA = Test<kSingleDMA, fi::SymmetricDMAMemory, All2all, SingleLinkBW>;
+using MultiDMA = Test<kMultiDMA, fi::SymmetricDMAMemory, All2allMulti, TotalLinkBW>;
+using RoundRobinDMA = Test<kRoundRobinDMA, fi::SymmetricDMAMemory, All2allRoundRobin, TotalLinkBW>;
+using SinglePin = Test<kSinglePin, fi::SymmetricPinMemory, All2all, SingleLinkBW>;
+using MultiPin = Test<kMultiPin, fi::SymmetricPinMemory, All2allMulti, TotalLinkBW>;
 
 int main(int argc, char* argv[]) {
   try {

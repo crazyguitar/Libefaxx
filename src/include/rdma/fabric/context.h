@@ -2,6 +2,8 @@
 #include <io/handle.h>
 #include <rdma/fi_domain.h>
 
+namespace fi {
+
 /**
  * @brief Context for completion queue operations
  */
@@ -21,3 +23,5 @@ struct ImmContext : public Context {
   ImmContext() noexcept : Context{}, imm_data(0) {}
   ImmContext(uint64_t data) noexcept : Context{}, imm_data(data) {}
 };
+
+}  // namespace fi

@@ -95,8 +95,8 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
 inline constexpr char kSingleDevice[] = "SingleDevice";
 inline constexpr char kSingleHost[] = "SingleHost";
 
-using SingleDevice = Test<kSingleDevice, SymmetricDMAMemory, PairVerifyGPU>;  ///< GPU DMA buffer test
-using SingleHost = Test<kSingleHost, SymmetricHostMemory, PairVerifyCPU>;     ///< Host pinned buffer test
+using SingleDevice = Test<kSingleDevice, fi::SymmetricDMAMemory, PairVerifyGPU>;  ///< GPU DMA buffer test
+using SingleHost = Test<kSingleHost, fi::SymmetricHostMemory, PairVerifyCPU>;     ///< Host pinned buffer test
 
 int main(int argc, char* argv[]) {
   try {
