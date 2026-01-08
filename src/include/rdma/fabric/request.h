@@ -5,6 +5,8 @@
 #include <tuple>
 #include <vector>
 
+namespace fi {
+
 enum class DeviceRequestType : uint32_t { kPut = 0, kGet = 1, kFence = 2, kCount = 3 };
 
 struct DeviceRequest {
@@ -64,3 +66,5 @@ __device__ __forceinline__ void Quiet(uint64_t* posted, uint64_t* completed) {
   __threadfence_system();
 }
 #endif
+
+}  // namespace fi

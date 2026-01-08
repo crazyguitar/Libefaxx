@@ -18,6 +18,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace fi {
+
 /**
  * @brief Base buffer class for RDMA channel operations
  *
@@ -792,3 +794,5 @@ class DevicePinBuffer : public Buffer {
   int device_ = -1;              ///< CUDA device ID
   void* mapped_data_ = nullptr;  ///< Host pinned pointer registered for RDMA
 };
+
+}  // namespace fi

@@ -163,4 +163,8 @@ template <typename QueueType = Queue<DeviceRequest>>
 using SymmetricDMAMemoryT = SymmetricMemory<DeviceDMABuffer, QueueType>;
 using SymmetricDMAMemory = SymmetricDMAMemoryT<>;
 
+template <typename QueueType = Queue<DeviceRequest>>
+using SymmetricHostMemoryT = SymmetricMemory<HostBuffer, QueueType>;
+using SymmetricHostMemory = SymmetricHostMemoryT<>;
+
 }  // namespace ib

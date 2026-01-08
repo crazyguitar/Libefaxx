@@ -18,6 +18,8 @@
 #include <unordered_set>
 #include <vector>
 
+namespace fi {
+
 /**
  * @brief Entry for tracking immediate data completions and waiters
  */
@@ -204,3 +206,5 @@ class FabricSelector : public detail::Selector {
   std::unordered_set<struct fid_cq*> cqs_;  ///< Registered completion queues
   ImmContextMap imm_;                       ///< Immediate data tracking map
 };
+
+}  // namespace fi

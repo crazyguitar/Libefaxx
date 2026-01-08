@@ -4,7 +4,7 @@
 
 int main(int argc, char *argv[]) {
   std::cout << "=== libfabric EFA devices ===\n";
-  auto* info = EFAInfo::Get();
+  auto* info = fi::EFAInfo::Get();
   for (auto p = info; !!p; p = p->next) {
     std::cout << "provider: " << p->fabric_attr->prov_name << "\n";
     std::cout << "    fabric: " << p->fabric_attr->name << "\n";

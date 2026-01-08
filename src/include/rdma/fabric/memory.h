@@ -15,6 +15,8 @@
 #include <queue/queue.cuh>
 #include <type_traits>
 
+namespace fi {
+
 /**
  * @brief Symmetric memory class with 2D RMA IOV structure
  *
@@ -266,3 +268,5 @@ using SymmetricPinMemory = SymmetricPinMemoryT<>;
 template <typename QueueType = Queue<DeviceRequest>>
 using SymmetricHostMemoryT = SymmetricMemory<HostBuffer, QueueType>;
 using SymmetricHostMemory = SymmetricHostMemoryT<>;
+
+}  // namespace fi

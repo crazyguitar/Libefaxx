@@ -18,6 +18,8 @@ static constexpr size_t kMaxAddrSize = 64;
 /** @brief Actual size of EFA endpoint addresses */
 static constexpr size_t kAddrSize = 32;
 
+namespace fi {
+
 /**
  * @brief Check libfabric call result and throw on error
  * @param exp Libfabric expression to evaluate
@@ -330,3 +332,5 @@ class EFA : private NoCopy {
   struct fid_av* av_ = nullptr;
   char addr_[kMaxAddrSize] = {0};
 };
+
+}  // namespace fi

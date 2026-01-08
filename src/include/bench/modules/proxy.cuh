@@ -16,8 +16,8 @@ __device__ __forceinline__ void DeviceWrite(Ctx ctx, int target, size_t len, int
   for (size_t idx = threadIdx.x; idx < len; idx += blockDim.x) data[idx] = target + static_cast<int>(idx);
   __threadfence_system();
   if (threadIdx.x == 0) {
-    DeviceRequest req{
-        .type = static_cast<uint64_t>(DeviceRequestType::kPut),
+    fi::DeviceRequest req{
+        .type = static_cast<uint64_t>(fi::DeviceRequestType::kPut),
         .rank = static_cast<uint64_t>(target),
         .size = len * sizeof(int),
         .addr = reinterpret_cast<uint64_t>(data),
@@ -25,8 +25,8 @@ __device__ __forceinline__ void DeviceWrite(Ctx ctx, int target, size_t len, int
     };
     while (!ctx.queue->Push(req)) __threadfence_system();
     atomicAdd(reinterpret_cast<unsigned long long*>(ctx.posted), 1ULL);
-    Fence();
-    Quiet(ctx.posted, ctx.completed);
+    fi::Fence();
+    fi::Quiet(ctx.posted, ctx.completed);
   }
   __syncthreads();
 }
@@ -37,8 +37,8 @@ __device__ __forceinline__ void DeviceWriteNBI(Ctx ctx, int target, size_t len, 
   for (size_t idx = threadIdx.x; idx < len; idx += blockDim.x) data[idx] = target + static_cast<int>(idx);
   __threadfence_system();
   if (threadIdx.x == 0) {
-    DeviceRequest req{
-        .type = static_cast<uint64_t>(DeviceRequestType::kPut),
+    fi::DeviceRequest req{
+        .type = static_cast<uint64_t>(fi::DeviceRequestType::kPut),
         .rank = static_cast<uint64_t>(target),
         .size = len * sizeof(int),
         .addr = reinterpret_cast<uint64_t>(data),
@@ -46,7 +46,7 @@ __device__ __forceinline__ void DeviceWriteNBI(Ctx ctx, int target, size_t len, 
     };
     while (!ctx.queue->Push(req)) __threadfence_system();
     atomicAdd(reinterpret_cast<unsigned long long*>(ctx.posted), 1ULL);
-    Fence();
+    fi::Fence();
   }
   __syncthreads();
 }
@@ -107,7 +107,7 @@ __global__ void ProxyWriteKernel(Ctx ctx, int target, size_t len, int* __restric
 template <typename Ctx>
 __global__ void ProxyWriteNBIKernel(Ctx ctx, int target, size_t len, int* __restrict__ data, uint64_t imm, int iters) {
   for (int i = 0; i < iters; ++i) DeviceWriteNBI(ctx, target, len, data, imm);
-  if (threadIdx.x == 0) Quiet(ctx.posted, ctx.completed);
+  if (threadIdx.x == 0) fi::Quiet(ctx.posted, ctx.completed);
   __syncthreads();
 }
 
@@ -160,10 +160,10 @@ struct ProxyWrite {
     Launcher<CtxType>::Launch(cfg, ctx, target, len, data, 1ULL, iters);
 
     Progress progress(iters, MultiChannel ? peer.GetTotalBandwidth() : peer.GetBandwidth(0));
-    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<fi::FabricSelector>(efa);
     ::Run([&]() -> Coro<> {
       for (int done = 0; done < iters;) {
-        DeviceRequest req;
+        fi::DeviceRequest req;
         if (ctx.queue->Pop(req)) {
           co_await Write(write[target], target, req.imm);
           write[target]->Complete();
@@ -171,7 +171,7 @@ struct ProxyWrite {
         }
         co_await YieldAwaiter{};
       }
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<fi::FabricSelector>(efa);
     }());
     CUDA_CHECK(cudaStreamSynchronize(peer.stream));
   }
@@ -207,13 +207,13 @@ struct ProxyRead {
     cudaLaunchConfig_t cfg{.gridDim = {1, 1, 1}, .blockDim = {256, 1, 1}, .stream = peer.stream};
     LAUNCH_KERNEL(&cfg, ProxyWaitKernel<CtxType>, ctx, peer.mpi.GetWorldRank(), len, data, iters, result);
 
-    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<fi::FabricSelector>(efa);
     ::Run([&]() -> Coro<> {
       for (int i = 0; i < iters; ++i) {
         co_await Wait(read[0], 1);
         read[0]->Complete();
       }
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<fi::FabricSelector>(efa);
     }());
 
     CUDA_CHECK(cudaStreamSynchronize(peer.stream));

@@ -4,6 +4,9 @@
 
 #include <iostream>
 
+/** @brief Shared flag to print device info only once across fabric/ib peers */
+inline bool g_device_info_printed = false;
+
 /**
  * @brief Singleton wrapper for MPI initialization and process information
  */

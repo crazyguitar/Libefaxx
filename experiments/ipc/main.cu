@@ -37,7 +37,7 @@ struct Test {
     int local_size = peer.mpi.GetLocalSize();
 
     // Allocate IPC buffer and exchange handles with local ranks
-    auto bufs = peer.AllocIPC<SymmetricDMAMemory>(size);
+    auto bufs = peer.AllocIPC<fi::SymmetricDMAMemory>(size);
     auto local_world_ranks = peer.Handshake(bufs, std::true_type{});
 
     auto& affinity = GPUloc::Get().GetGPUAffinity()[peer.device];

@@ -8,6 +8,7 @@
 #include <io/selector.h>
 #include <rdma/ib/context.h>
 #include <rdma/ib/ib.h>
+#include <spdlog/spdlog.h>
 
 #include <unordered_map>
 #include <unordered_set>
@@ -46,6 +47,7 @@ inline ssize_t ib_cq_read(ib_cq* cq, ib_cq_data_entry* entries, size_t max_entri
   size_t count = 0;
   do {
     if (cq_ex->status) {
+      SPDLOG_ERROR("CQ error: status={} vendor_err={}", static_cast<int>(cq_ex->status), ibv_wc_read_vendor_err(cq_ex));
       ibv_end_poll(cq->cq);
       return -EIO;
     }
@@ -88,6 +90,7 @@ class IBSelector : public detail::Selector {
     for (auto* cq : cqs_) {
       auto rc = ib_cq_read(cq, cq_entries, kMaxCQEntries);
       if (rc > 0) HandleCompletion(cq_entries, static_cast<size_t>(rc), res, imm_);
+      if (rc < 0) SPDLOG_ERROR("ib_cq_read error: {}", rc);
     }
     return res;
   }

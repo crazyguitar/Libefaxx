@@ -75,9 +75,9 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
 }
 
 // Queue type aliases
-using ManagedMem = SymmetricDMAMemoryT<Queue<DeviceRequest>>;
-using PinnedMem = SymmetricDMAMemoryT<PinnedQueue<DeviceRequest>>;
-using GdrMem = SymmetricDMAMemoryT<GdrQueue<DeviceRequest>>;
+using ManagedMem = fi::SymmetricDMAMemoryT<Queue<fi::DeviceRequest>>;
+using PinnedMem = fi::SymmetricDMAMemoryT<PinnedQueue<fi::DeviceRequest>>;
+using GdrMem = fi::SymmetricDMAMemoryT<GdrQueue<fi::DeviceRequest>>;
 
 // Single channel - Blocking mode
 using ManagedBlocking = Test<ManagedMem, false, KernelBlocking>;

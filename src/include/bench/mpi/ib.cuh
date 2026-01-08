@@ -41,6 +41,13 @@ void IBInitBuffer(T* buf, size_t num_ints, int value, cudaStream_t stream) {
   CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
+/** @brief Initialize buffer specialization for ib::SymmetricHostMemory (CPU loop) */
+template <>
+inline void IBInitBuffer(ib::SymmetricHostMemory* buf, size_t num_ints, int value, cudaStream_t) {
+  int* data = reinterpret_cast<int*>(buf->Data());
+  for (size_t i = 0; i < num_ints; ++i) data[i] = value;
+}
+
 /**
  * @brief RDMA peer with CUDA stream and benchmarking support using ibverbs
  */

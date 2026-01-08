@@ -75,11 +75,11 @@ struct PairWrite {
 
   template <typename T>
   void operator()(Peer& peer, typename Peer::template Buffers<T>& write, typename Peer::template Buffers<T>& read) {
-    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<fi::FabricSelector>(efa);
     Run([&]() -> Coro<> {
       co_await Write<Peer>{target, channel}.template operator()<T>(peer, write);
       co_await Read<Peer>{target}.template operator()<T>(peer, read);
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<fi::FabricSelector>(efa);
     }());
   }
 };
@@ -93,11 +93,11 @@ struct PairWriteMulti {
 
   template <typename T>
   void operator()(Peer& peer, typename Peer::template Buffers<T>& write, typename Peer::template Buffers<T>& read) {
-    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<fi::FabricSelector>(efa);
     Run([&]() -> Coro<> {
       co_await WriteMulti<Peer>{target}.template operator()<T>(peer, write);
       co_await ReadMulti<Peer>{target}.template operator()<T>(peer, read);
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<fi::FabricSelector>(efa);
     }());
   }
 };

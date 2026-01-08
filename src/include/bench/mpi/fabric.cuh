@@ -41,26 +41,26 @@ __global__ void InitBufferKernel(int* __restrict__ data, size_t len, int value) 
  * @return Unique pointer to created buffer
  */
 template <typename T>
-std::unique_ptr<T> MakeBuffer(std::vector<Channel>& c, int device, size_t size, int world_size) {
+std::unique_ptr<T> MakeBuffer(std::vector<fi::Channel>& c, int device, size_t size, int world_size) {
   return std::make_unique<T>(c, size, world_size, device);
 }
 
 /** @brief Create buffer specialization for raw HostBuffer */
 template <>
-inline std::unique_ptr<HostBuffer> MakeBuffer(std::vector<Channel>& c, int device, size_t size, int) {
-  return std::make_unique<HostBuffer>(c, device, size);
+inline std::unique_ptr<fi::HostBuffer> MakeBuffer(std::vector<fi::Channel>& c, int device, size_t size, int) {
+  return std::make_unique<fi::HostBuffer>(c, device, size);
 }
 
 /** @brief Create buffer specialization for raw DeviceDMABuffer */
 template <>
-inline std::unique_ptr<DeviceDMABuffer> MakeBuffer(std::vector<Channel>& c, int device, size_t size, int) {
-  return std::make_unique<DeviceDMABuffer>(c, device, size);
+inline std::unique_ptr<fi::DeviceDMABuffer> MakeBuffer(std::vector<fi::Channel>& c, int device, size_t size, int) {
+  return std::make_unique<fi::DeviceDMABuffer>(c, device, size);
 }
 
 /** @brief Create buffer specialization for raw DevicePinBuffer */
 template <>
-inline std::unique_ptr<DevicePinBuffer> MakeBuffer(std::vector<Channel>& c, int device, size_t size, int) {
-  return std::make_unique<DevicePinBuffer>(c, device, size);
+inline std::unique_ptr<fi::DevicePinBuffer> MakeBuffer(std::vector<fi::Channel>& c, int device, size_t size, int) {
+  return std::make_unique<fi::DevicePinBuffer>(c, device, size);
 }
 
 /**
@@ -82,14 +82,14 @@ void InitBuffer(T* buf, size_t num_ints, int value, cudaStream_t stream) {
 
 /** @brief Initialize buffer specialization for HostBuffer (CPU loop) */
 template <>
-inline void InitBuffer(HostBuffer* buf, size_t num_ints, int value, cudaStream_t) {
+inline void InitBuffer(fi::HostBuffer* buf, size_t num_ints, int value, cudaStream_t) {
   int* data = reinterpret_cast<int*>(buf->Data());
   for (size_t i = 0; i < num_ints; ++i) data[i] = value;
 }
 
 /** @brief Initialize buffer specialization for SymmetricHostMemory (CPU loop) */
 template <>
-inline void InitBuffer(SymmetricHostMemory* buf, size_t num_ints, int value, cudaStream_t) {
+inline void InitBuffer(fi::SymmetricHostMemory* buf, size_t num_ints, int value, cudaStream_t) {
   int* data = reinterpret_cast<int*>(buf->Data());
   for (size_t i = 0; i < num_ints; ++i) data[i] = value;
 }
@@ -114,7 +114,7 @@ void RandInit(T* buf, size_t num_ints, cudaStream_t stream) {
 
 /** @brief Random initialize CPU buffer */
 template <>
-inline void RandInit(HostBuffer* buf, size_t num_ints, cudaStream_t) {
+inline void RandInit(fi::HostBuffer* buf, size_t num_ints, cudaStream_t) {
   int* data = reinterpret_cast<int*>(buf->Data());
   unsigned seed = static_cast<unsigned>(std::chrono::high_resolution_clock::now().time_since_epoch().count());
   for (size_t i = 0; i < num_ints; ++i) data[i] = (seed * 1103515245 + 12345 + i) & 0x7fffffff;
