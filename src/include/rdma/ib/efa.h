@@ -39,6 +39,7 @@
  */
 #pragma once
 
+#include <hwloc.h>
 #include <infiniband/verbs.h>
 #include <io/common.h>
 #include <spdlog/spdlog.h>
@@ -66,14 +67,14 @@
  * Queries ibverbs for available RDMA devices and filters EFA devices
  * by name prefix (rdmap*, efa*) or Amazon vendor ID (0x1d0f).
  */
-class VerbDeviceList : private NoCopy {
+class IBDeviceList : private NoCopy {
  public:
   /**
    * @brief Get singleton instance
    * @return Reference to device list manager
    */
-  static VerbDeviceList& Get() {
-    static VerbDeviceList instance;
+  static IBDeviceList& Get() {
+    static IBDeviceList instance;
     return instance;
   }
 
@@ -85,6 +86,42 @@ class VerbDeviceList : private NoCopy {
   [[nodiscard]] size_t Count() const { return all_.size(); }
   /** @brief Get EFA device count */
   [[nodiscard]] size_t EFACount() const { return efa_.size(); }
+
+  /**
+   * @brief Find ibv_device matching hwloc PCI address
+   * @param efa hwloc object representing the EFA device
+   * @return Matching ibv_device or nullptr
+   *
+   * Matches by comparing PCI domain, bus, device, and function IDs
+   */
+  [[nodiscard]] ibv_device* Find(hwloc_obj_t efa) const {
+    if (!efa || !efa->attr) return nullptr;
+    auto hw = efa->attr->pcidev;
+    for (auto* dev : efa_) {
+      unsigned domain, bus, slot, func;
+      if (ParsePCI(dev, domain, bus, slot, func)) {
+        if (domain == hw.domain && bus == hw.bus && slot == hw.dev && func == hw.func) {
+          return dev;
+        }
+      }
+    }
+    return nullptr;
+  }
+
+ private:
+  /**
+   * @brief Parse PCI address from ibv_device sysfs path
+   * @return true if successfully parsed
+   */
+  static bool ParsePCI(ibv_device* dev, unsigned& domain, unsigned& bus, unsigned& slot, unsigned& func) {
+    char sym_path[PATH_MAX], real_path[PATH_MAX];
+    snprintf(sym_path, sizeof(sym_path), "%s/device", dev->ibdev_path);
+    if (!realpath(sym_path, real_path)) return false;
+    const char* dbdf = strrchr(real_path, '/');
+    if (!dbdf) return false;
+    dbdf++;
+    return sscanf(dbdf, "%x:%x:%x.%x", &domain, &bus, &slot, &func) == 4;
+  }
 
  private:
   /**
@@ -103,7 +140,7 @@ class VerbDeviceList : private NoCopy {
     return is_efa;
   }
 
-  VerbDeviceList() {
+  IBDeviceList() {
     int num = 0;
     list_ = ibv_get_device_list(&num);
     if (!list_) {
@@ -116,7 +153,7 @@ class VerbDeviceList : private NoCopy {
     }
   }
 
-  ~VerbDeviceList() {
+  ~IBDeviceList() {
     if (list_) ibv_free_device_list(list_);
   }
 
@@ -132,15 +169,16 @@ class VerbDeviceList : private NoCopy {
  * Opens device and queries attributes, port info, and GID.
  * Supports move semantics for efficient resource transfer.
  */
-class VerbDevice : private NoCopy {
+class IBDevice : private NoCopy {
  public:
-  VerbDevice() = delete;
+  IBDevice() = delete;
 
   /**
-   * @brief Construct device context
+   * @brief Construct device context from ibv_device
    * @param dev Device from ibv_get_device_list
    */
-  explicit VerbDevice(ibv_device* dev) : dev_{dev} {
+  explicit IBDevice(ibv_device* dev) : dev_{dev} {
+    IBV_CHECK(dev_);
     IBV_CHECK(ctx_ = ibv_open_device(dev));
     IBV_CHECK(ibv_query_device(ctx_, &attr_) == 0);
     IBV_CHECK(ibv_query_port(ctx_, 1, &port_) == 0);
@@ -148,16 +186,22 @@ class VerbDevice : private NoCopy {
   }
 
   /**
+   * @brief Construct device context from hwloc object
+   * @param efa hwloc object representing the EFA device
+   */
+  explicit IBDevice(hwloc_obj_t efa) : IBDevice(IBDeviceList::Get().Find(efa)) {}
+
+  /**
    * @brief Move constructor
    * @param o Source device to move from
    */
-  VerbDevice(VerbDevice&& o) noexcept
+  IBDevice(IBDevice&& o) noexcept
       : dev_{std::exchange(o.dev_, nullptr)}, ctx_{std::exchange(o.ctx_, nullptr)}, attr_{o.attr_}, port_{o.port_}, gid_{o.gid_} {}
 
   /**
    * @brief Destructor - closes device context
    */
-  ~VerbDevice() {
+  ~IBDevice() {
     if (ctx_) ibv_close_device(ctx_);
   }
 

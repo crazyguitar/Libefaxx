@@ -28,6 +28,7 @@
  */
 #pragma once
 
+#include <affinity/affinity.h>
 #include <bootstrap/mpi/mpi.h>
 #include <rdma/ib/efa.h>
 
@@ -47,25 +48,31 @@ struct ConnInfo {
  * @brief Base RDMA peer for ibverbs communication
  *
  * Manages MPI, ibverbs resources (PD, CQ, QP), and connection setup.
+ * Uses GPU affinity to select EFA devices on the same PCI bridge.
  */
 class Peer : private NoCopy {
  public:
   MPI& mpi;
-  std::vector<VerbDevice> devices;
+  const GPUloc& loc;
+  int device = -1;
+  std::vector<IBDevice> devices;
   std::vector<ibv_pd*> pds;
   std::vector<ibv_cq*> cqs;
   std::vector<ibv_qp*> qps;
   std::vector<std::vector<ConnInfo>> remote_info;  // [rank][device]
   std::vector<std::vector<ibv_ah*>> ahs;           // [rank][device]
 
-  Peer() : mpi(MPI::Get()) {
+  Peer() : mpi(MPI::Get()), loc(GPUloc::Get()) {
     const auto world_size = mpi.GetWorldSize();
-    auto& dev_list = VerbDeviceList::Get();
-    for (auto* dev : dev_list.EFA()) {
-      devices.emplace_back(VerbDevice(dev));
-    }
+    device = mpi.GetLocalRank();
     remote_info.resize(world_size);
     ahs.resize(world_size);
+
+    // Use GPU affinity to find corresponding EFA devices
+    auto& affinity = loc.GetGPUAffinity()[device];
+    for (auto e : affinity.efas) {
+      devices.emplace_back(IBDevice(e));
+    }
 
     // Init PD, CQ, QP for each device
     for (auto& dev : devices) {
