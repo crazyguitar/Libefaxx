@@ -12,9 +12,9 @@ int main(int argc, char *argv[]) {
   }
 
   std::cout << "\n=== ibverbs EFA devices ===\n";
-  auto& devs = VerbDeviceList::Get();
+  auto& devs = IBDeviceList::Get();
   for (auto* dev : devs.EFA()) {
-    VerbDevice efa(dev);
+    IBDevice efa(dev);
     std::cout << "provider: efa\n";
     std::cout << "    fabric: efa\n";
     std::cout << "    domain: " << efa.Name() << "\n";
