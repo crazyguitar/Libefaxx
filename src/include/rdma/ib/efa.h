@@ -10,7 +10,6 @@
 #include <hwloc.h>
 #include <io/common.h>
 #include <rdma/ib/ib.h>
-#include <spdlog/spdlog.h>
 
 namespace ib {
 

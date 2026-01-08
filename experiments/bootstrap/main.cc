@@ -33,8 +33,8 @@ int main(int argc, char *argv[]) {
   // Assert same number of connections
   for (int r = 0; r < world_size; ++r) {
     if (r == rank) continue;
-    assert(fi_peer.channels[r].size() == ib_peer.ahs[r].size() && "Connection count mismatch");
-    SPDLOG_INFO("Rank {} -> Rank {}: fi={} channels, ib={} AHs", rank, r, fi_peer.channels[r].size(), ib_peer.ahs[r].size());
+    assert(fi_peer.channels[r].size() == ib_peer.channels[r].size() && "Connection count mismatch");
+    SPDLOG_INFO("Rank {} -> Rank {}: fi={} channels, ib={} channels", rank, r, fi_peer.channels[r].size(), ib_peer.channels[r].size());
   }
 
   MPI_Barrier(MPI_COMM_WORLD);
