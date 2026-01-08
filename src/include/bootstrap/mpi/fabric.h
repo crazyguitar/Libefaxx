@@ -24,6 +24,8 @@
  * Manages MPI, EFA endpoints, and RDMA channels. Provides connection setup
  * and RMA handshake for multi-rank communication.
  */
+namespace fi {
+
 class Peer : private NoCopy {
  public:
   using AddrBuffer = std::array<char, kMaxAddrSize>;
@@ -219,3 +221,5 @@ class Peer : private NoCopy {
     return total;
   }
 };
+
+}  // namespace fi
