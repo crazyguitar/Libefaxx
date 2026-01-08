@@ -7,6 +7,7 @@
 #include <cuda.h>
 #include <io/common.h>
 #include <io/coro.h>
+#include <rdma/buffer.h>
 #include <rdma/ib/channel.h>
 #include <rdma/ib/selector.h>
 #include <unistd.h>
@@ -16,34 +17,13 @@
 
 namespace ib {
 
+using ImmdataAwaiter = rdma::ImmdataAwaiter<IBSelector, ImmContext>;
+
 /**
  * @brief Base buffer class for RDMA channel operations using ibverbs
  */
 class Buffer : private NoCopy {
  public:
-  /**
-   * @brief Awaiter for immediate data operations
-   */
-  struct ImmdataAwaiter {
-    uint64_t imm_data{0};
-    ImmContext context{0};
-
-    constexpr bool await_ready() const noexcept { return false; }
-
-    void await_resume() noexcept { IO::Get().Quit<IBSelector>(context); }
-
-    template <typename Promise>
-    bool await_suspend(std::coroutine_handle<Promise> coroutine) {
-      if (imm_data == 0) [[unlikely]]
-        return false;
-      context.handle = &coroutine.promise();
-      context.imm_data = imm_data;
-      if (IO::Get().Join<IBSelector>(context)) return false;
-      coroutine.promise().SetState(Handle::kSuspend);
-      return true;
-    }
-  };
-
   Buffer() = delete;
   Buffer(Buffer&& other) = delete;
   Buffer& operator=(Buffer&& other) = delete;

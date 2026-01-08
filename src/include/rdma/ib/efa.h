@@ -9,7 +9,11 @@
 
 #include <hwloc.h>
 #include <io/common.h>
+#include <rdma/efa.h>
 #include <rdma/ib/ib.h>
+
+using rdma::kAddrSize;
+using rdma::kMaxAddrSize;
 
 namespace ib {
 
@@ -151,15 +155,8 @@ class EFA : private NoCopy {
   [[nodiscard]] ib_ep* GetEP() noexcept { return ep_; }
   [[nodiscard]] ib_info* GetInfo() noexcept { return efa_; }
 
-  static std::string Addr2Str(const char* addr) {
-    std::string out;
-    for (size_t i = 0; i < kAddrSize; ++i) out += fmt::format("{:02x}", static_cast<uint8_t>(addr[i]));
-    return out;
-  }
-
-  static void Str2Addr(const std::string& addr, char* bytes) noexcept {
-    for (size_t i = 0; i < kAddrSize; ++i) sscanf(addr.c_str() + 2 * i, "%02hhx", &bytes[i]);
-  }
+  static std::string Addr2Str(const char* addr) { return rdma::Addr2Str(addr); }
+  static void Str2Addr(const std::string& addr, char* bytes) noexcept { rdma::Str2Addr(addr, bytes); }
 
  private:
   static bool ParsePCI(ibv_device* dev, unsigned& domain, unsigned& bus, unsigned& slot, unsigned& func) {

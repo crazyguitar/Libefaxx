@@ -9,7 +9,7 @@
 
 #include <bootstrap/mpi/fabric.h>
 #include <rdma/fabric/memory.h>
-#include <rdma/fabric/request.h>
+#include <rdma/request.h>
 
 #include <unordered_map>
 
