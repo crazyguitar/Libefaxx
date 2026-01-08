@@ -7,16 +7,15 @@
 #include <hwloc.h>
 #include <io/common.h>
 #include <io/event.h>
+#include <rdma/efa.h>
 #include <rdma/fabric.h>
 #include <rdma/fi_cm.h>
 #include <rdma/fi_domain.h>
 #include <rdma/fi_endpoint.h>
 #include <spdlog/spdlog.h>
 
-/** @brief Maximum buffer size for endpoint addresses */
-static constexpr size_t kMaxAddrSize = 64;
-/** @brief Actual size of EFA endpoint addresses */
-static constexpr size_t kAddrSize = 32;
+using rdma::kAddrSize;
+using rdma::kMaxAddrSize;
 
 namespace fi {
 
@@ -245,25 +244,8 @@ class EFA : private NoCopy {
   /** @brief Get libfabric provider info for this EFA */
   [[nodiscard]] const struct fi_info* GetInfo() const noexcept { return efa_; }
 
-  /**
-   * @brief Convert binary address to hex string
-   * @param addr Binary address buffer
-   * @return Hex string representation
-   */
-  static std::string Addr2Str(const char* addr) {
-    std::string out;
-    for (size_t i = 0; i < kAddrSize; ++i) out += fmt::format("{:02x}", addr[i]);
-    return out;
-  }
-
-  /**
-   * @brief Convert hex string to binary address
-   * @param addr Hex string address
-   * @param bytes Output binary buffer
-   */
-  static void Str2Addr(const std::string& addr, char* bytes) noexcept {
-    for (size_t i = 0; i < kAddrSize; ++i) sscanf(addr.c_str() + 2 * i, "%02hhx", &bytes[i]);
-  }
+  static std::string Addr2Str(const char* addr) { return rdma::Addr2Str(addr); }
+  static void Str2Addr(const std::string& addr, char* bytes) noexcept { rdma::Str2Addr(addr, bytes); }
 
  private:
   /**

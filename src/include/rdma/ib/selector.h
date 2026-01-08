@@ -1,6 +1,6 @@
 /**
  * @file selector.h
- * @brief ibverbs completion queue selector for async I/O (equivalent to FabricSelector)
+ * @brief ibverbs completion queue selector for async I/O
  */
 #pragma once
 #include <arpa/inet.h>
@@ -8,34 +8,20 @@
 #include <io/selector.h>
 #include <rdma/ib/context.h>
 #include <rdma/ib/ib.h>
+#include <rdma/selector.h>
 #include <spdlog/spdlog.h>
 
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace ib {
 
-/** @brief Entry for tracking immediate data completions and waiters */
-struct ImmEntry {
-  ImmContext* ctx{nullptr};
-  int pending{0};
-};
-
-using ImmContextMap = std::unordered_map<uint64_t, ImmEntry>;
-
-static constexpr size_t kMaxCQEntries = 128;
+using ImmEntry = rdma::ImmEntry<ImmContext>;
+using ImmContextMap = rdma::ImmContextMap<ImmContext>;
+using rdma::kMaxCQEntries;
 
 /**
  * @brief Read completion queue entries (equivalent to fi_cq_read)
- *
- * Reference: libfabric/prov/efa/src/efa_cq.c:44-56 (efa_cq_read_entry_common)
- * Reference: libfabric/prov/efa/src/efa_cq.c:63-75 (efa_cq_read_data_entry)
- *
- * @param cq Completion queue handle
- * @param entries Output array for completion entries
- * @param max_entries Maximum entries to read
- * @return Number of entries read, or negative error code
  */
 inline ssize_t ib_cq_read(ib_cq* cq, ib_cq_data_entry* entries, size_t max_entries) {
   ibv_poll_cq_attr attr{};
@@ -95,66 +81,28 @@ class IBSelector : public detail::Selector {
     return res;
   }
 
-  /** @brief Register an EFA endpoint's completion queue */
   template <typename E>
-  void Join(E& efa) noexcept {
-    cqs_.emplace(efa.GetCQ());
-  }
+  void Join(E& efa) noexcept { cqs_.emplace(efa.GetCQ()); }
 
-  /** @brief Unregister an EFA endpoint's completion queue */
   template <typename E>
-  void Quit(E& efa) noexcept {
-    cqs_.erase(efa.GetCQ());
-  }
+  void Quit(E& efa) noexcept { cqs_.erase(efa.GetCQ()); }
 
-  /** @brief Register an immediate data context for monitoring */
-  bool Join(ImmContext& ctx) {
-    auto& entry = imm_[ctx.imm_data];
-    if (entry.pending > 0) {
-      entry.pending--;
-      if (entry.pending == 0 && entry.ctx == nullptr) imm_.erase(ctx.imm_data);
-      return true;
-    }
-    entry.ctx = &ctx;
-    return false;
-  }
-
-  /** @brief Unregister an immediate data context */
-  void Quit(ImmContext& ctx) {
-    auto it = imm_.find(ctx.imm_data);
-    if (it == imm_.end()) return;
-    it->second.ctx = nullptr;
-    if (it->second.pending == 0) imm_.erase(it);
-  }
+  bool Join(ImmContext& ctx) { return rdma::JoinImm(imm_, ctx); }
+  void Quit(ImmContext& ctx) { rdma::QuitImm(imm_, ctx); }
 
   [[nodiscard]] bool Stopped() const noexcept override final { return cqs_.empty(); }
 
  private:
-  static void HandleImmdata(ib_cq_data_entry& entry, std::vector<Event>& ret, ImmContextMap& imm) {
-    uint64_t imm_data = entry.data;
-    if (!imm_data) return;
-    auto& e = imm[imm_data];
-    if (e.ctx && e.ctx->handle) {
-      e.ctx->entry = entry;
-      ret.emplace_back(Event{static_cast<int>(entry.flags), e.ctx->handle});
-      e.ctx = nullptr;
-    } else {
-      e.pending++;
-    }
-  }
-
   static void HandleCompletion(ib_cq_data_entry* cq_entries, size_t n, std::vector<Event>& ret, ImmContextMap& imm) {
     for (size_t i = 0; i < n; ++i) {
       auto& entry = cq_entries[i];
-      // Check for remote write with immediate data
       if (entry.data != 0) {
-        HandleImmdata(entry, ret, imm);
+        rdma::HandleImmdata(entry, ret, imm);
       } else {
         Context* context = reinterpret_cast<Context*>(entry.op_context);
         if (!context) continue;
         context->entry = entry;
-        Handle* handle = context->handle;
-        ret.emplace_back(Event{-1, entry.flags, handle});
+        ret.emplace_back(Event{-1, entry.flags, context->handle});
       }
     }
   }

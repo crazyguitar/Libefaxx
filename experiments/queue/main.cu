@@ -13,7 +13,7 @@
 #include <getopt.h>
 #include <io/awaiter.h>
 #include <io/runner.h>
-#include <rdma/fabric/request.h>
+#include <rdma/request.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
