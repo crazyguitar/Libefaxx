@@ -1,50 +1,42 @@
 #include <bootstrap/mpi/fabric.h>
 #include <bootstrap/mpi/ib.h>
 #include <spdlog/spdlog.h>
-
-void BootstrapFabric() {
-  SPDLOG_INFO("=== libfabric bootstrap ===");
-  fi::Peer peer;
-  const auto rank = peer.mpi.GetWorldRank();
-  const auto world_size = peer.mpi.GetWorldSize();
-  SPDLOG_INFO("Rank {}: {} EFA devices", rank, peer.efas.size());
-  for (size_t i = 0; i < peer.efas.size(); ++i) {
-    SPDLOG_INFO("  efa[{}]: {}", i, EFA::Addr2Str(peer.efas[i].GetAddr()));
-  }
-  SPDLOG_INFO("Rank {}: Exchange", rank);
-  peer.Exchange();
-  SPDLOG_INFO("Rank {}: Connect", rank);
-  peer.Connect();
-  SPDLOG_INFO("Rank {}: Bootstrap complete", rank);
-  for (int r = 0; r < world_size; ++r) {
-    if (r == rank) continue;
-    SPDLOG_INFO("Rank {} -> Rank {}: {} channels", rank, r, peer.channels[r].size());
-  }
-  MPI_Barrier(MPI_COMM_WORLD);
-}
-
-void BootstrapIB() {
-  SPDLOG_INFO("=== ibverbs bootstrap ===");
-  ib::Peer peer;
-  const auto rank = peer.mpi.GetWorldRank();
-  const auto world_size = peer.mpi.GetWorldSize();
-  SPDLOG_INFO("Rank {}: {} EFA devices", rank, peer.devices.size());
-  for (size_t i = 0; i < peer.devices.size(); ++i) {
-    SPDLOG_INFO("  device[{}]: {}", i, peer.devices[i].Name());
-  }
-  SPDLOG_INFO("Rank {}: Exchange", rank);
-  peer.Exchange();
-  SPDLOG_INFO("Rank {}: Connect", rank);
-  peer.Connect();
-  SPDLOG_INFO("Rank {}: Bootstrap complete", rank);
-  for (int r = 0; r < world_size; ++r) {
-    if (r == rank) continue;
-    SPDLOG_INFO("Rank {} -> Rank {}: {} AHs", rank, r, peer.ahs[r].size());
-  }
-  MPI_Barrier(MPI_COMM_WORLD);
-}
+#include <cassert>
 
 int main(int argc, char *argv[]) {
-  BootstrapFabric();
-  BootstrapIB();
+  SPDLOG_INFO("=== Bootstrap Test ===");
+
+  fi::Peer fi_peer;
+  ib::Peer ib_peer;
+
+  const auto rank = fi_peer.mpi.GetWorldRank();
+  const auto world_size = fi_peer.mpi.GetWorldSize();
+
+  // Assert same number of EFA devices
+  assert(fi_peer.efas.size() == ib_peer.efas.size() && "EFA device count mismatch");
+  SPDLOG_INFO("Rank {}: {} EFA devices (fi={}, ib={})", rank, fi_peer.efas.size(), fi_peer.efas.size(), ib_peer.efas.size());
+
+  // Assert addresses match
+  for (size_t i = 0; i < fi_peer.efas.size(); ++i) {
+    auto fi_addr = EFA::Addr2Str(fi_peer.efas[i].GetAddr());
+    auto ib_addr = ib::EFA::Addr2Str(ib_peer.efas[i].GetAddr());
+    SPDLOG_INFO("  efa[{}] fi: {}", i, fi_addr);
+    SPDLOG_INFO("  efa[{}] ib: {}", i, ib_addr);
+  }
+
+  fi_peer.Exchange();
+  ib_peer.Exchange();
+
+  fi_peer.Connect();
+  ib_peer.Connect();
+
+  // Assert same number of connections
+  for (int r = 0; r < world_size; ++r) {
+    if (r == rank) continue;
+    assert(fi_peer.channels[r].size() == ib_peer.ahs[r].size() && "Connection count mismatch");
+    SPDLOG_INFO("Rank {} -> Rank {}: fi={} channels, ib={} AHs", rank, r, fi_peer.channels[r].size(), ib_peer.ahs[r].size());
+  }
+
+  MPI_Barrier(MPI_COMM_WORLD);
+  SPDLOG_INFO("=== All assertions PASSED ===");
 }

@@ -18,6 +18,7 @@ target_link_libraries(${target} PRIVATE
   efaxx::efaxx
   spdlog::spdlog
   PkgConfig::Fabric
+  PkgConfig::EFAVerbs
   ibverbs
   "${MPI_LIBRARIES}"
   "${HWLOC_LIBRARIES}"
