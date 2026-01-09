@@ -98,7 +98,7 @@ int main(int argc, char* argv[]) {
 
   if (rank == 0) {
     FabricBench::Print(
-        "IPC Write Benchmark - Parallelism Impact on NVLink Utilization", local_size, opts.warmup, opts.repeat, 0,
+        "IPC Write Benchmark - Parallelism Impact on NVLink Utilization", local_size, opts.warmup, opts.repeat,
         "Demonstrates how grid/block dimensions affect NVLink bandwidth utilization", {"IPC(1x256)", "IPC(1x1024)", "IPC(16x256)", "IPC(128x256)"},
         results
     );

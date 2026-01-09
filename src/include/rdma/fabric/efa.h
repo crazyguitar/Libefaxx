@@ -150,17 +150,18 @@ class EFA : private NoCopy {
   }
 
   ~EFA() noexcept {
-    if (cq_) {
-      fi_close((fid_t)cq_);
-      cq_ = nullptr;
+    // Close in reverse order of creation: ep depends on cq/av, which depend on domain, which depends on fabric
+    if (ep_) {
+      fi_close((fid_t)ep_);
+      ep_ = nullptr;
     }
     if (av_) {
       fi_close((fid_t)av_);
       av_ = nullptr;
     }
-    if (ep_) {
-      fi_close((fid_t)ep_);
-      ep_ = nullptr;
+    if (cq_) {
+      fi_close((fid_t)cq_);
+      cq_ = nullptr;
     }
     if (domain_) {
       fi_close((fid_t)domain_);

@@ -173,7 +173,7 @@ inline int ib_domain_open(ib_info* info, ib_domain** domain) {
  */
 inline int ib_domain_close(ib_domain* domain) {
   if (domain) {
-    if (domain->pd) ibv_dealloc_pd(domain->pd);
+    if (domain->pd) IB_CHECK(ibv_dealloc_pd(domain->pd) == 0);
     delete domain;
   }
   return 0;
@@ -475,7 +475,7 @@ inline int ib_mr_reg(ib_domain* domain, void* buf, size_t len, int access, ib_mr
  */
 inline int ib_mr_close(ib_mr* mr) {
   if (mr) {
-    if (mr->mr) ibv_dereg_mr(mr->mr);
+    if (mr->mr) IB_CHECK(ibv_dereg_mr(mr->mr) == 0);
     delete mr;
   }
   return 0;

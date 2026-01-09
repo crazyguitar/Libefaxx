@@ -217,7 +217,6 @@ class BenchBase : public PeerBase {
       int nranks,
       int warmup,
       int iters,
-      double link_bw,
       const char* pattern,
       const std::vector<std::string>& columns,
       const std::vector<std::array<BenchResult, N>>& results
@@ -226,7 +225,6 @@ class BenchBase : public PeerBase {
     printf("# nranks: %d\n", nranks);
     printf("# warmup iters: %d\n", warmup);
     printf("# bench iters: %d\n", iters);
-    printf("# link bandwidth: %.0f Gbps\n#\n", link_bw);
     if (pattern) printf("# Pattern: %s\n#\n", pattern);
     printf("# BusBW: Percentage of theoretical link bandwidth achieved\n#\n");
     printf("%12s %12s", "size", "count");
