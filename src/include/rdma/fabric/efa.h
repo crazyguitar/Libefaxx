@@ -96,7 +96,7 @@ class EFAInfo : private NoCopy {
     hints->domain_attr->mr_mode = FI_MR_LOCAL | FI_MR_HMEM | FI_MR_VIRT_ADDR | FI_MR_ALLOCATED | FI_MR_PROV_KEY;
     hints->domain_attr->threading = FI_THREAD_SAFE;
 
-    rc = fi_getinfo(FI_VERSION(2, 3), NULL, NULL, 0, hints, &info);
+    rc = fi_getinfo(FI_VERSION(1, 20), NULL, NULL, 0, hints, &info);
     if (rc != 0) {
       SPDLOG_ERROR("fi_getinfo fail. error({}): {}", rc, fi_strerror(-rc));
       goto error;
