@@ -1,6 +1,9 @@
 /**
  * @file ib.h
  * @brief Base RDMA peer class for EFA communication using ibverbs
+ *
+ * Peer owns 2D channel structure: channels[world_size][num_channels]
+ * where channel[rank][i] connects to peer's channel[my_rank][i]
  */
 #pragma once
 
@@ -22,6 +25,8 @@ namespace ib {
 
 /**
  * @brief Base RDMA peer for EFA communication using ibverbs
+ *
+ * Owns channels[world_size][num_channels] - buffers reference these channels
  */
 class Peer : private NoCopy {
  public:
@@ -33,8 +38,8 @@ class Peer : private NoCopy {
   const GPUloc& loc;
   int device = -1;
   std::vector<EFA> efas;
-  std::vector<std::vector<Channel>> channels;
-  std::vector<std::vector<AddrBuffer>> addrs;
+  std::vector<std::vector<Channel>> channels;  // [world_size][num_channels]
+  std::vector<std::vector<AddrBuffer>> addrs;  // [world_size][num_efas]
 
   Peer() : mpi(MPI::Get()), loc(GPUloc::Get()) {
     const auto world_size = mpi.GetWorldSize();
@@ -46,6 +51,7 @@ class Peer : private NoCopy {
       g_device_info_printed = true;
     }
     addrs.resize(world_size);
+    channels.resize(world_size);
     auto& affinity = loc.GetGPUAffinity()[device];
     Taskset::Set(affinity.cores[device]->logical_index);
     IO::Get().Set(std::make_unique<IBSelector>());
@@ -74,18 +80,27 @@ class Peer : private NoCopy {
     }
   }
 
+  /**
+   * @brief Connect channels to all peers
+   *
+   * Creates channels[rank][ch] where ch[rank][i] connects to peer's ch[my_rank][i]
+   */
   void Connect() {
     const auto world_size = mpi.GetWorldSize();
     const auto rank = mpi.GetWorldRank();
-    channels.resize(world_size);
-    for (int i = 0; i < world_size; ++i) {
-      if (i == rank) continue;
-      auto& remotes = addrs[i];
+    for (int peer = 0; peer < world_size; ++peer) {
+      if (peer == rank) continue;
+      auto& remotes = addrs[peer];
       const auto n = std::min(remotes.size(), efas.size());
-      for (size_t j = 0; j < n; ++j) channels[i].emplace_back(Channel{std::addressof(efas[j]), remotes[j].data()});
+      for (size_t ch = 0; ch < n; ++ch) {
+        channels[peer].emplace_back(Channel{std::addressof(efas[ch]), remotes[ch].data()});
+      }
     }
   }
 
+  /**
+   * @brief Handshake RMA IOVs between write and read buffers
+   */
   template <typename T>
   void Handshake(Buffers<T>& write_bufs, Buffers<T>& read_bufs) {
     const auto world_size = mpi.GetWorldSize();
@@ -100,11 +115,7 @@ class Peer : private NoCopy {
     }
   }
 
-  size_t GetBandwidth(int ch = 0) const noexcept {
-    // EFA link speed: 100 Gbps per device
-    return 100ULL * 1000 * 1000 * 1000;
-  }
-
+  size_t GetBandwidth(int ch = 0) const noexcept { return 100ULL * 1000 * 1000 * 1000; }
   size_t GetTotalBandwidth() const noexcept { return efas.size() * GetBandwidth(0); }
 };
 

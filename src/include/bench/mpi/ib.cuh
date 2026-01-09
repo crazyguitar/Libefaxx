@@ -24,7 +24,7 @@ __global__ void IBInitBufferKernel(int* __restrict__ data, size_t len, int value
  * @brief Create buffer for ib::SymmetricMemory types
  */
 template <typename T>
-std::unique_ptr<T> IBMakeBuffer(std::vector<ib::Channel>& c, int device, size_t size, int world_size) {
+std::unique_ptr<T> IBMakeBuffer(std::vector<std::vector<ib::Channel>>& c, int device, size_t size, int world_size) {
   return std::make_unique<T>(c, size, world_size, device);
 }
 
@@ -71,7 +71,7 @@ class IBBench : public ib::Peer {
     int value = (init_value == -1) ? rank : init_value;
     for (int i = 0; i < world_size; ++i) {
       if (i == rank) continue;
-      buffers[i] = IBMakeBuffer<T>(channels[i], device, size, world_size);
+      buffers[i] = IBMakeBuffer<T>(channels, device, size, world_size);
       IBInitBuffer(buffers[i].get(), num_ints, value, stream);
     }
     return buffers;

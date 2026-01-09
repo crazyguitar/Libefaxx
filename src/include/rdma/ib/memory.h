@@ -1,6 +1,9 @@
 /**
  * @file memory.h
  * @brief Symmetric memory implementation for RDMA operations using ibverbs
+ *
+ * Buffer references Peer's channels[world_size][num_channels]
+ * RMA IOVs: rma_iovs_[world_size][num_channels]
  */
 #pragma once
 
@@ -18,13 +21,13 @@ namespace ib {
 /**
  * @brief Symmetric memory class with 2D RMA IOV structure (ibverbs version)
  *
- * @tparam BufferType The underlying buffer type (DeviceDMABuffer)
+ * @tparam BufferType The underlying buffer type (DeviceDMABuffer or HostBuffer)
  * @tparam QueueType The queue type for GPU-CPU communication
  */
 template <typename BufferType, typename QueueType = Queue<DeviceRequest>>
 class SymmetricMemory : public BufferType {
  public:
-  SymmetricMemory(std::vector<Channel>& channels, size_t size, int world_size, int device = -1, size_t align = BufferType::kAlign)
+  SymmetricMemory(std::vector<std::vector<Channel>>& channels, size_t size, int world_size, int device = -1, size_t align = BufferType::kAlign)
       : BufferType(channels, device, size, align), world_size_(world_size) {
     rma_iovs_.resize(world_size_);
     CUDA_CHECK(cudaMallocManaged(&posted_, sizeof(uint64_t)));
@@ -75,18 +78,18 @@ class SymmetricMemory : public BufferType {
 
   [[nodiscard]] Coro<ssize_t> Write(int rank, uint64_t imm_data, size_t ch) {
     const auto& iov = GetRemoteRmaIov(rank, ch);
-    return BufferType::Write(iov.addr, iov.key, imm_data, ch);
+    return BufferType::Write(rank, iov.addr, iov.key, imm_data, ch);
   }
 
   [[nodiscard]] Coro<ssize_t> Writeall(int rank, uint64_t imm_data, size_t ch) {
     const auto& iov = GetRemoteRmaIov(rank, ch);
-    return BufferType::Writeall(iov.addr, iov.key, imm_data, ch);
+    return BufferType::Writeall(rank, iov.addr, iov.key, imm_data, ch);
   }
 
   static constexpr uint64_t EncodeImmdata(uint64_t imm_data, size_t ch) noexcept { return (imm_data << 8) | (ch & 0xFF); }
 
   [[nodiscard]] Coro<ssize_t> Writeall(int rank, uint64_t imm_data) {
-    const size_t num_channels = this->channels_.size();
+    const size_t num_channels = this->mrs_.size();
     const size_t total_size = this->Size();
     const size_t chunk_size = total_size / num_channels;
     const auto& remote_rma = GetRemoteRmaIovs(rank);
@@ -101,7 +104,7 @@ class SymmetricMemory : public BufferType {
       auto* mr = this->mrs_[ch];
       auto addr = remote_rma[ch].addr + offset;
       auto key = remote_rma[ch].key;
-      futures.emplace_back(this->channels_[ch].Writeall(data + offset, len, mr, addr, key, EncodeImmdata(imm_data, ch)));
+      futures.emplace_back(this->channels_[rank][ch].Writeall(data + offset, len, mr, addr, key, EncodeImmdata(imm_data, ch)));
     }
 
     ssize_t total_written = 0;
@@ -114,17 +117,17 @@ class SymmetricMemory : public BufferType {
   }
 
   [[nodiscard]] Coro<> WaitallImmdata(uint64_t imm_data) {
-    for (size_t ch = 0; ch < this->channels_.size(); ++ch) {
+    for (size_t ch = 0; ch < this->mrs_.size(); ++ch) {
       co_await BufferType::WaitImmdata(EncodeImmdata(imm_data, ch));
     }
   }
 
   [[nodiscard]] Coro<ssize_t> Sendall(int rank, size_t ch) {
     const auto& iov = GetRemoteRmaIov(rank, ch);
-    co_return co_await BufferType::Sendall(iov.addr, iov.key, 1, ch);
+    co_return co_await BufferType::Sendall(rank, iov.addr, iov.key, 1, ch);
   }
 
-  [[nodiscard]] Coro<ssize_t> Recvall(size_t ch) { co_return co_await BufferType::Recvall(1, ch); }
+  [[nodiscard]] Coro<ssize_t> Recvall(int rank, size_t ch) { co_return co_await BufferType::Recvall(rank, 1, ch); }
 
   [[nodiscard]] QueueType* GetQueue() noexcept { return &queue_; }
   [[nodiscard]] uint64_t* GetPosted() noexcept { return posted_; }
@@ -159,7 +162,7 @@ class SymmetricMemory : public BufferType {
 
  private:
   int world_size_;
-  std::vector<std::vector<ib_rma_iov>> rma_iovs_;
+  std::vector<std::vector<ib_rma_iov>> rma_iovs_;  // [world_size][num_channels]
   QueueType queue_;
   uint64_t* posted_ = nullptr;
   uint64_t* completed_ = nullptr;

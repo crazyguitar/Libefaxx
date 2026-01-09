@@ -1,6 +1,8 @@
 /**
  * @file buffer.h
  * @brief Buffer management for RDMA operations using ibverbs
+ *
+ * Buffer references 2D channel structure from Peer: channels[world_size][num_channels]
  */
 #pragma once
 
@@ -21,6 +23,8 @@ using ImmdataAwaiter = rdma::ImmdataAwaiter<IBSelector, ImmContext>;
 
 /**
  * @brief Base buffer class for RDMA channel operations using ibverbs
+ *
+ * References 2D channel structure: channels[world_size][num_channels]
  */
 class Buffer : private NoCopy {
  public:
@@ -33,55 +37,61 @@ class Buffer : private NoCopy {
   [[nodiscard]] virtual void* RdmaData() noexcept { return data_; }
   [[nodiscard]] size_t Size() const noexcept { return size_; }
 
-  [[nodiscard]] Coro<ssize_t> Write(void* __restrict__ buffer, size_t len, uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
-    ASSERT(buffer && len > 0 && ch < channels_.size() && mrs_[ch]);
-    auto rc = co_await channels_[ch].Write(buffer, len, mrs_[ch], addr, key, imm_data);
-    if (rc < 0) [[unlikely]] {
+  [[nodiscard]] Coro<ssize_t> Write(int rank, void* __restrict__ buffer, size_t len, uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
+    ASSERT(buffer && len > 0 && ch < channels_[rank].size() && ch < mrs_.size());
+    auto* mr = mrs_[ch];
+    ASSERT(mr);
+    auto rc = co_await channels_[rank][ch].Write(buffer, len, mr, addr, key, imm_data);
+    if (rc < 0) [[unlikely]]
       throw std::runtime_error(fmt::format("ib_writemsg fail. error({}): {}", rc, strerror(-rc)));
-    }
     co_return rc;
   }
 
-  [[nodiscard]] Coro<ssize_t> Writeall(void* __restrict__ buffer, size_t len, uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
-    ASSERT(buffer && len > 0 && ch < channels_.size() && mrs_[ch]);
-    auto rc = co_await channels_[ch].Writeall(buffer, len, mrs_[ch], addr, key, imm_data);
-    if (rc < 0) [[unlikely]] {
+  [[nodiscard]] Coro<ssize_t> Writeall(int rank, void* __restrict__ buffer, size_t len, uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
+    ASSERT(buffer && len > 0 && ch < channels_[rank].size() && ch < mrs_.size());
+    auto* mr = mrs_[ch];
+    ASSERT(mr);
+    auto rc = co_await channels_[rank][ch].Writeall(buffer, len, mr, addr, key, imm_data);
+    if (rc < 0) [[unlikely]]
       throw std::runtime_error(fmt::format("ib_writemsg fail. error({}): {}", rc, strerror(-rc)));
-    }
     co_return rc;
   }
 
-  [[nodiscard]] Coro<ssize_t> Write(size_t len, uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
-    co_return co_await Write(data_, len, addr, key, imm_data, ch);
+  [[nodiscard]] Coro<ssize_t> Write(int rank, size_t len, uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
+    co_return co_await Write(rank, data_, len, addr, key, imm_data, ch);
   }
 
-  [[nodiscard]] Coro<ssize_t> Write(uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
-    co_return co_await Write(data_, size_, addr, key, imm_data, ch);
+  [[nodiscard]] Coro<ssize_t> Write(int rank, uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
+    co_return co_await Write(rank, data_, size_, addr, key, imm_data, ch);
   }
 
-  [[nodiscard]] Coro<ssize_t> Writeall(size_t len, uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
-    co_return co_await Writeall(data_, len, addr, key, imm_data, ch);
+  [[nodiscard]] Coro<ssize_t> Writeall(int rank, size_t len, uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
+    co_return co_await Writeall(rank, data_, len, addr, key, imm_data, ch);
   }
 
-  [[nodiscard]] Coro<ssize_t> Writeall(uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
-    co_return co_await Writeall(data_, size_, addr, key, imm_data, ch);
+  [[nodiscard]] Coro<ssize_t> Writeall(int rank, uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
+    co_return co_await Writeall(rank, data_, size_, addr, key, imm_data, ch);
   }
 
-  [[nodiscard]] Coro<ssize_t> Sendall(void* __restrict__ buffer, size_t len, uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
-    ASSERT(buffer && len > 0 && ch < channels_.size() && mrs_[ch]);
-    co_return co_await channels_[ch].Sendall(buffer, len, mrs_[ch], addr, key, imm_data);
+  [[nodiscard]] Coro<ssize_t> Sendall(int rank, void* __restrict__ buffer, size_t len, uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
+    ASSERT(buffer && len > 0 && ch < channels_[rank].size() && ch < mrs_.size());
+    auto* mr = mrs_[ch];
+    ASSERT(mr);
+    co_return co_await channels_[rank][ch].Sendall(buffer, len, mr, addr, key, imm_data);
   }
 
-  [[nodiscard]] Coro<ssize_t> Sendall(uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
-    co_return co_await Sendall(data_, size_, addr, key, imm_data, ch);
+  [[nodiscard]] Coro<ssize_t> Sendall(int rank, uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
+    co_return co_await Sendall(rank, data_, size_, addr, key, imm_data, ch);
   }
 
-  [[nodiscard]] Coro<ssize_t> Recvall(size_t len, uint64_t imm_data, size_t ch) {
-    ASSERT(len > 0 && ch < channels_.size() && mrs_[ch]);
-    co_return co_await channels_[ch].Recvall(data_, len, mrs_[ch], imm_data);
+  [[nodiscard]] Coro<ssize_t> Recvall(int rank, size_t len, uint64_t imm_data, size_t ch) {
+    ASSERT(len > 0 && ch < channels_[rank].size() && ch < mrs_.size());
+    auto* mr = mrs_[ch];
+    ASSERT(mr);
+    co_return co_await channels_[rank][ch].Recvall(data_, len, mr, imm_data);
   }
 
-  [[nodiscard]] Coro<ssize_t> Recvall(uint64_t imm_data, size_t ch) { co_return co_await Recvall(size_, imm_data, ch); }
+  [[nodiscard]] Coro<ssize_t> Recvall(int rank, uint64_t imm_data, size_t ch) { co_return co_await Recvall(rank, size_, imm_data, ch); }
 
   [[nodiscard]] Coro<> WaitImmdata(uint64_t imm_data) {
     if (imm_data == 0) [[unlikely]]
@@ -90,7 +100,7 @@ class Buffer : private NoCopy {
   }
 
  protected:
-  Buffer(std::vector<Channel>& channels, size_t size) : channels_{channels}, size_{size} { ASSERT(size > 0); }
+  Buffer(std::vector<std::vector<Channel>>& channels, size_t size) : channels_{channels}, size_{size} { ASSERT(size > 0); }
 
   [[nodiscard]] static constexpr void* Align(void* ptr, size_t align) noexcept { return (void*)(((uintptr_t)ptr + align - 1) & ~(align - 1)); }
 
@@ -98,8 +108,8 @@ class Buffer : private NoCopy {
     return {reinterpret_cast<uint64_t>(data), size, ib_mr_rkey(mr)};
   }
 
-  std::vector<Channel>& channels_;
-  std::vector<ib_mr*> mrs_;
+  std::vector<std::vector<Channel>>& channels_;  // Reference to Peer's channels[world_size][num_channels]
+  std::vector<ib_mr*> mrs_;                      // [num_channels] - one MR per channel/EFA
   size_t size_ = 0;
   void* raw_ = nullptr;
   void* data_ = nullptr;
@@ -112,7 +122,7 @@ class DeviceDMABuffer : public Buffer {
  public:
   static constexpr size_t kAlign = 4096;
 
-  DeviceDMABuffer(std::vector<Channel>& channels, int device, size_t size, size_t align = kAlign) : Buffer(channels, size), device_{device} {
+  DeviceDMABuffer(std::vector<std::vector<Channel>>& channels, int device, size_t size, size_t align = kAlign) : Buffer(channels, size), device_{device} {
     ASSERT(align > 0 && (align & (align - 1)) == 0);
     const size_t page_size = sysconf(_SC_PAGESIZE);
     const size_t effective_align = std::max(align, page_size);
@@ -155,39 +165,38 @@ class DeviceDMABuffer : public Buffer {
 
  protected:
   /**
-   * @brief Register GPU memory with libfabric using dmabuf
+   * @brief Register GPU memory with one MR per EFA/channel
    *
-   * Reference: libfabric/prov/efa/src/efa_mr.c (fi_mr_regattr with FI_MR_DMABUF)
-   * Note: Uses ibv_reg_dmabuf_mr directly instead of fi_mr_regattr
-   *
-   * @param channel Channel to register with
-   * @param data GPU memory buffer pointer
-   * @param size Buffer size in bytes
-   * @param dmabuf_fd CUDA dmabuf file descriptor
-   * @return Memory region handle
+   * Uses first non-empty channel vector to get EFA references
    */
-  static ib_mr* Register(Channel& channel, void* __restrict__ data, size_t size, int dmabuf_fd) {
-    ib_mr* mr = nullptr;
-    auto* efa = channel.GetEFA();
-    auto* domain = efa->GetDomain();
-
-    // Use ibv_reg_dmabuf_mr for GPU memory
-    ibv_mr* ibv_mr_ptr = ibv_reg_dmabuf_mr(
-        domain->pd, 0, size, reinterpret_cast<uint64_t>(data), dmabuf_fd, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ
-    );
-    if (!ibv_mr_ptr) {
-      throw std::runtime_error(fmt::format("ibv_reg_dmabuf_mr failed: {}", strerror(errno)));
+  static std::vector<ib_mr*> Register(std::vector<std::vector<Channel>>& channels, void* __restrict__ data, size_t size, int dmabuf_fd) {
+    // Find first non-empty channel vector to determine num_channels
+    size_t num_channels = 0;
+    for (auto& ch_vec : channels) {
+      if (!ch_vec.empty()) {
+        num_channels = ch_vec.size();
+        break;
+      }
     }
+    ASSERT(num_channels > 0);
 
-    mr = new ib_mr{ibv_mr_ptr, domain};
-    return mr;
-  }
-
-  static std::vector<ib_mr*> Register(std::vector<Channel>& channels, void* __restrict__ data, size_t size, int dmabuf_fd) {
     std::vector<ib_mr*> mrs;
-    mrs.reserve(channels.size());
-    for (auto& ch : channels) {
-      mrs.push_back(Register(ch, data, size, dmabuf_fd));
+    mrs.reserve(num_channels);
+
+    // Register with each EFA (one MR per channel)
+    for (auto& ch_vec : channels) {
+      if (ch_vec.empty()) continue;
+      for (size_t ch = 0; ch < ch_vec.size(); ++ch) {
+        if (mrs.size() > ch) continue;  // Already registered for this channel
+        auto* efa = ch_vec[ch].GetEFA();
+        auto* domain = efa->GetDomain();
+        ibv_mr* ibv_mr_ptr = ibv_reg_dmabuf_mr(
+            domain->pd, 0, size, reinterpret_cast<uint64_t>(data), dmabuf_fd, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ
+        );
+        if (!ibv_mr_ptr) throw std::runtime_error(fmt::format("ibv_reg_dmabuf_mr failed: {}", strerror(errno)));
+        mrs.push_back(new ib_mr{ibv_mr_ptr, domain});
+      }
+      break;  // Only need to register once per EFA
     }
     return mrs;
   }
@@ -203,7 +212,7 @@ class HostBuffer : public Buffer {
  public:
   static constexpr size_t kAlign = 128;
 
-  HostBuffer(std::vector<Channel>& channels, int /*device*/, size_t size, size_t align = kAlign) : Buffer(channels, size) {
+  HostBuffer(std::vector<std::vector<Channel>>& channels, int /*device*/, size_t size, size_t align = kAlign) : Buffer(channels, size) {
     ASSERT(align > 0 && (align & (align - 1)) == 0);
     raw_ = malloc(size + align - 1);
     ASSERT(raw_);
@@ -211,7 +220,7 @@ class HostBuffer : public Buffer {
     mrs_ = Register(channels_, data_, size_);
   }
 
-  HostBuffer(std::vector<Channel>& channels, size_t size, size_t align = kAlign) : HostBuffer(channels, 0, size, align) {}
+  HostBuffer(std::vector<std::vector<Channel>>& channels, size_t size, size_t align = kAlign) : HostBuffer(channels, 0, size, align) {}
 
   ~HostBuffer() override {
     for (auto* mr : mrs_) ib_mr_close(mr);
@@ -223,19 +232,32 @@ class HostBuffer : public Buffer {
   }
 
  protected:
-  static ib_mr* Register(Channel& channel, void* __restrict__ data, size_t size) {
-    auto* efa = channel.GetEFA();
-    auto* domain = efa->GetDomain();
-    ib_mr* mr = nullptr;
-    int rc = ib_mr_reg(domain, data, size, IB_MR_LOCAL_READ | IB_MR_REMOTE_WRITE | IB_MR_REMOTE_READ, &mr);
-    if (rc) throw std::runtime_error(fmt::format("ib_mr_reg failed: {}", strerror(-rc)));
-    return mr;
-  }
+  static std::vector<ib_mr*> Register(std::vector<std::vector<Channel>>& channels, void* __restrict__ data, size_t size) {
+    size_t num_channels = 0;
+    for (auto& ch_vec : channels) {
+      if (!ch_vec.empty()) {
+        num_channels = ch_vec.size();
+        break;
+      }
+    }
+    ASSERT(num_channels > 0);
 
-  static std::vector<ib_mr*> Register(std::vector<Channel>& channels, void* __restrict__ data, size_t size) {
     std::vector<ib_mr*> mrs;
-    mrs.reserve(channels.size());
-    for (auto& ch : channels) mrs.push_back(Register(ch, data, size));
+    mrs.reserve(num_channels);
+
+    for (auto& ch_vec : channels) {
+      if (ch_vec.empty()) continue;
+      for (size_t ch = 0; ch < ch_vec.size(); ++ch) {
+        if (mrs.size() > ch) continue;
+        auto* efa = ch_vec[ch].GetEFA();
+        auto* domain = efa->GetDomain();
+        ib_mr* mr = nullptr;
+        int rc = ib_mr_reg(domain, data, size, IB_MR_LOCAL_READ | IB_MR_REMOTE_WRITE | IB_MR_REMOTE_READ, &mr);
+        if (rc) throw std::runtime_error(fmt::format("ib_mr_reg failed: {}", strerror(-rc)));
+        mrs.push_back(mr);
+      }
+      break;
+    }
     return mrs;
   }
 };

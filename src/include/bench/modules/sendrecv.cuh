@@ -21,7 +21,7 @@ struct SendRecv {
     for (auto& efa : peer.efas) IO::Get().Join<Selector>(efa);
     Run([&]() -> Coro<> {
       co_await send[target]->Sendall(target, channel);
-      co_await recv[target]->Recvall(channel);
+      co_await recv[target]->Recvall(target, channel);
       for (auto& efa : peer.efas) IO::Get().Quit<Selector>(efa);
     }());
   }
@@ -40,7 +40,7 @@ struct RecvSend {
     if (peer.mpi.GetWorldRank() != target) return;
     for (auto& efa : peer.efas) IO::Get().Join<Selector>(efa);
     Run([&]() -> Coro<> {
-      co_await recv[0]->Recvall(channel);
+      co_await recv[0]->Recvall(0, channel);
       co_await send[0]->Sendall(0, channel);
       for (auto& efa : peer.efas) IO::Get().Quit<Selector>(efa);
     }());
