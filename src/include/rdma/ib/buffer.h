@@ -67,6 +67,22 @@ class Buffer : private NoCopy {
     co_return co_await Writeall(data_, size_, addr, key, imm_data, ch);
   }
 
+  [[nodiscard]] Coro<ssize_t> Sendall(void* __restrict__ buffer, size_t len, uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
+    ASSERT(buffer && len > 0 && ch < channels_.size() && mrs_[ch]);
+    co_return co_await channels_[ch].Sendall(buffer, len, mrs_[ch], addr, key, imm_data);
+  }
+
+  [[nodiscard]] Coro<ssize_t> Sendall(uint64_t addr, uint32_t key, uint64_t imm_data, size_t ch) {
+    co_return co_await Sendall(data_, size_, addr, key, imm_data, ch);
+  }
+
+  [[nodiscard]] Coro<ssize_t> Recvall(size_t len, uint64_t imm_data, size_t ch) {
+    ASSERT(len > 0 && ch < channels_.size() && mrs_[ch]);
+    co_return co_await channels_[ch].Recvall(data_, len, mrs_[ch], imm_data);
+  }
+
+  [[nodiscard]] Coro<ssize_t> Recvall(uint64_t imm_data, size_t ch) { co_return co_await Recvall(size_, imm_data, ch); }
+
   [[nodiscard]] Coro<> WaitImmdata(uint64_t imm_data) {
     if (imm_data == 0) [[unlikely]]
       throw std::invalid_argument("imm_data must be greater than 0");

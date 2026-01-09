@@ -3,8 +3,8 @@
  * @brief Libfabric-specific context for completion queue operations
  */
 #pragma once
-#include <rdma/fi_domain.h>
 #include <io/handle.h>
+#include <rdma/fi_domain.h>
 
 namespace fi {
 

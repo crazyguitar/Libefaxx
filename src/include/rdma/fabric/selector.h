@@ -7,10 +7,10 @@
 #include <io/selector.h>
 #include <rdma/fabric.h>
 #include <rdma/fabric/context.h>
-#include <rdma/selector.h>
 #include <rdma/fi_cm.h>
 #include <rdma/fi_domain.h>
 #include <rdma/fi_endpoint.h>
+#include <rdma/selector.h>
 
 #include <unordered_set>
 #include <vector>
@@ -48,10 +48,14 @@ class FabricSelector : public detail::Selector {
   }
 
   template <typename E>
-  void Join(E& efa) noexcept { cqs_.emplace(efa.GetCQ()); }
+  void Join(E& efa) noexcept {
+    cqs_.emplace(efa.GetCQ());
+  }
 
   template <typename E>
-  void Quit(E& efa) noexcept { cqs_.erase(efa.GetCQ()); }
+  void Quit(E& efa) noexcept {
+    cqs_.erase(efa.GetCQ());
+  }
 
   bool Join(ImmContext& ctx) { return rdma::JoinImm(imm_, ctx); }
   void Quit(ImmContext& ctx) { rdma::QuitImm(imm_, ctx); }
@@ -89,9 +93,7 @@ class FabricSelector : public detail::Selector {
     }
   }
 
-  static void FatalError(int rc) {
-    throw std::runtime_error(fmt::format("fatal error. error({}): {}", rc, fi_strerror(-rc)));
-  }
+  static void FatalError(int rc) { throw std::runtime_error(fmt::format("fatal error. error({}): {}", rc, fi_strerror(-rc))); }
 
  private:
   std::unordered_set<struct fid_cq*> cqs_;

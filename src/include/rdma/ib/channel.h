@@ -7,12 +7,15 @@
 #include <io/coro.h>
 #include <io/future.h>
 #include <io/io.h>
+#include <rdma/channel.h>
 #include <rdma/ib/context.h>
 #include <rdma/ib/efa.h>
 #include <rdma/ib/ib.h>
 #include <rdma/ib/selector.h>
 
 namespace ib {
+
+using rdma::kChunkSize;
 
 /**
  * @brief RDMA channel managing GPU memory registration and remote peer connection
@@ -40,7 +43,7 @@ class Channel : private NoCopy {
     ssize_t await_resume() noexcept {
       if (rc != 0) [[unlikely]]
         return rc;
-      return context.entry.len;
+      return static_cast<ssize_t>(size);  // Use request size, CQE len is 0 for RDMA write
     }
 
     template <typename Promise>
@@ -53,6 +56,44 @@ class Channel : private NoCopy {
       ib_msg_rma msg{&iov, &lkey, 1, &rma_iov, 1, ah, qpn, qkey, &context, imm_data};
       uint64_t flags = imm_data ? IB_REMOTE_CQ_DATA : 0;
       rc = ib_writemsg(ep, &msg, flags);
+      return rc == 0;
+    }
+  };
+
+  /**
+   * @brief Coroutine awaiter for send operations (uses ib_sendmsg = RDMA WRITE with imm)
+   */
+  struct SendAwaiter {
+    void* __restrict__ data = nullptr;
+    size_t size = 0;
+    uint32_t lkey = 0;
+    uint64_t addr = 0;
+    uint32_t rkey = 0;
+    uint64_t imm_data = 0;
+    ibv_ah* ah = nullptr;
+    uint32_t qpn = 0;
+    uint32_t qkey = 0;
+    ib_ep* ep = nullptr;
+    Context context{};
+    ssize_t rc = 0;
+
+    constexpr bool await_ready() const noexcept { return false; }
+
+    ssize_t await_resume() noexcept {
+      if (rc != 0) [[unlikely]]
+        return rc;
+      return static_cast<ssize_t>(size);  // Use request size, CQE len is 0 for RDMA write
+    }
+
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> coroutine) {
+      coroutine.promise().SetState(Handle::kSuspend);
+      context.handle = &coroutine.promise();
+
+      iovec iov{data, size};
+      ib_rma_iov rma_iov{addr, size, rkey};
+      ib_msg_rma msg{&iov, &lkey, 1, &rma_iov, 1, ah, qpn, qkey, &context, imm_data};
+      rc = ib_sendmsg(ep, &msg, 0);
       return rc == 0;
     }
   };
@@ -103,6 +144,41 @@ class Channel : private NoCopy {
     co_return co_await GatherWrite<true>(data, len, mr, addr, key, imm_data);
   }
 
+  /**
+   * @brief Send data using RDMA WRITE with immediate (like UCCL)
+   */
+  [[nodiscard]] Coro<ssize_t> Sendall(void* __restrict__ data, size_t len, ib_mr* mr, uint64_t addr, uint32_t key, uint64_t imm_data) {
+    const size_t num_chunks = (len + kChunkSize - 1) / kChunkSize;
+    std::vector<Future<Coro<ssize_t>>> coros;
+    coros.reserve(num_chunks);
+
+    for (size_t offset = 0; offset < len; offset += kChunkSize) {
+      void* ptr = static_cast<char*>(data) + offset;
+      size_t size = std::min(kChunkSize, len - offset);
+      uint64_t chunk_addr = addr + offset;
+      uint64_t chunk_imm = (offset + size >= len) ? imm_data : 0;
+      coros.emplace_back(Await<true, SendAwaiter>(ptr, size, ib_mr_lkey(mr), chunk_addr, key, chunk_imm, ah_, qpn_, qkey_, efa_->GetEP()));
+    }
+
+    size_t n = 0;
+    for (auto& c : coros) {
+      auto rc = co_await c;
+      if (rc < 0) [[unlikely]] {
+        throw std::runtime_error(fmt::format("ib_sendmsg error: {} total: {}", strerror(-rc), n));
+      }
+      n += static_cast<size_t>(rc);
+    }
+    co_return n;
+  }
+
+  /**
+   * @brief Receive by waiting for RDMA WRITE with immediate completion
+   */
+  [[nodiscard]] Coro<ssize_t> Recvall(void* __restrict__ data, size_t len, ib_mr* mr, uint64_t imm_data) {
+    co_await ImmdataAwaiter{imm_data};
+    co_return static_cast<ssize_t>(len);
+  }
+
   void Connect(char* addr) {
     auto* av = efa_->GetAV();
     ah_ = ib_av_insert(av, addr);
@@ -112,6 +188,8 @@ class Channel : private NoCopy {
   }
 
  private:
+  using ImmdataAwaiter = rdma::ImmdataAwaiter<IBSelector, ImmContext>;
+
   template <bool all, typename Awaiter, typename... Args>
   Coro<ssize_t> Await(void* data, size_t len, Args... args) {
     if constexpr (all) {
@@ -171,7 +249,6 @@ class Channel : private NoCopy {
   }
 
  private:
-  static constexpr size_t kChunkSize = 1 << 20;  // 1MB
   EFA* efa_ = nullptr;
   ibv_ah* ah_ = nullptr;
   uint32_t qpn_ = 0;

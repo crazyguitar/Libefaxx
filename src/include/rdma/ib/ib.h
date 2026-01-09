@@ -609,6 +609,19 @@ inline int ib_writemsg(ib_ep* ep, const ib_msg_rma* msg, uint64_t flags) {
 }
 
 /**
+ * @brief Send message using RDMA WRITE with immediate data (like UCCL)
+ *
+ * Implements send semantics using RDMA WRITE to avoid EFA MTU limitations.
+ * Requires pre-exchanged remote memory info (addr, key).
+ *
+ * @param ep Endpoint handle
+ * @param msg Send message descriptor (includes remote RMA info)
+ * @param flags Operation flags
+ * @return 0 on success, negative errno on error
+ */
+inline int ib_sendmsg(ib_ep* ep, const ib_msg_rma* msg, uint64_t flags) { return ib_writemsg(ep, msg, flags | IB_REMOTE_CQ_DATA); }
+
+/**
  * @brief Simplified RDMA write (equivalent to fi_write)
  *
  * Convenience wrapper for single-buffer RDMA write operations.
