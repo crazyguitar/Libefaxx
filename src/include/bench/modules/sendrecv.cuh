@@ -1,6 +1,38 @@
 /**
  * @file sendrecv.cuh
  * @brief SendRecv benchmark functors for point-to-point communication
+ *
+ * This module benchmarks bidirectional send/recv operations using RDMA WRITE
+ * with immediate data (like UCCL pattern). Unlike pure RDMA write, this
+ * requires pre-exchanged remote memory info.
+ *
+ * ## Send/Recv Flow (Ping-Pong)
+ * ```
+ * Rank 0                              Rank T (target)
+ * ──────                              ───────────────
+ *    │                                     │
+ *    │  Sendall(target, ch)                │
+ *    │  [RDMA WRITE + imm to target]       │
+ *    ├────────────────────────────────────►│
+ *    │                                     │ Recvall(0, ch)
+ *    │                                     │ [Wait for imm]
+ *    │                                     │
+ *    │                                     │ Sendall(0, ch)
+ *    │◄────────────────────────────────────┤ [RDMA WRITE + imm back]
+ *    │  Recvall(target, ch)                │
+ *    │  [Wait for imm]                     │
+ *    │                                     │
+ * ```
+ *
+ * ## Implementation Details
+ * - Uses RDMA WRITE with immediate data for send semantics
+ * - Receiver waits for immediate data completion (no buffer posting)
+ * - Requires symmetric memory with pre-exchanged RMA IOVs
+ * - Measures round-trip latency and bandwidth
+ *
+ * ## Bandwidth
+ * - Single channel: ~97 Gbps per direction
+ * - Bidirectional: ~194 Gbps total (full duplex)
  */
 #pragma once
 
@@ -9,6 +41,9 @@
 
 /**
  * @brief Rank 0 send/recv functor
+ *
+ * Sends data to target, then receives response.
+ * Only rank 0 executes; other ranks return immediately.
  */
 template <typename Peer, typename Selector>
 struct SendRecv {

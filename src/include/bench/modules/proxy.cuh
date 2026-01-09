@@ -1,6 +1,48 @@
 /**
  * @file proxy.cuh
  * @brief GPU-Initiated Networking (GIN) module for proxy-based RDMA
+ *
+ * This module implements GPU-initiated RDMA writes via a CPU proxy coroutine.
+ * The GPU kernel pushes requests to a queue, and the CPU proxy executes
+ * the actual RDMA operations. This enables GPU-driven communication patterns.
+ *
+ * ## Architecture Overview
+ * ```
+ * ┌────────────────────────────────────────────────────────────────┐
+ * │                         GPU                                    │
+ * │  ┌─────────────────────────────────────────────────────────┐   │
+ * │  │  Kernel                                                 │   │
+ * │  │  ┌─────────┐    ┌─────────┐    ┌─────────┐              │   │
+ * │  │  │ Write   │───►│ Push to │───►│ Fence + │              │   │
+ * │  │  │ Data    │    │ Queue   │    │ Quiet   │              │   │
+ * │  │  └─────────┘    └────┬────┘    └─────────┘              │   │
+ * │  └──────────────────────┼──────────────────────────────────┘   │
+ * └─────────────────────────┼──────────────────────────────────────┘
+ *                           │ MPSC Queue (GPU→CPU)
+ *                           ▼
+ * ┌────────────────────────────────────────────────────────────────┐
+ * │                         CPU                                    │
+ * │  ┌─────────────────────────────────────────────────────────┐   │
+ * │  │  Proxy Coroutine                                        │   │
+ * │  │  ┌─────────┐    ┌─────────┐    ┌─────────┐              │   │
+ * │  │  │ Pop     │───►│ RDMA    │───►│Complete │              │   │
+ * │  │  │ Request │    │ Write   │    │ Counter │              │   │
+ * │  │  └─────────┘    └────┬────┘    └─────────┘              │   │
+ * │  └──────────────────────┼──────────────────────────────────┘   │
+ * └─────────────────────────┼──────────────────────────────────────┘
+ *                           │ EFA RDMA
+ *                           ▼
+ *                      ┌─────────┐
+ *                      │ Remote  │
+ *                      │ Memory  │
+ *                      └─────────┘
+ * ```
+ *
+ * ## Synchronization
+ * - `posted`: Atomic counter incremented by GPU after each push
+ * - `completed`: Atomic counter incremented by CPU after each RDMA
+ * - `Fence()`: __threadfence_system() for GPU-CPU visibility
+ * - `Quiet()`: Spin-wait until completed >= posted
  */
 #pragma once
 
@@ -9,7 +51,11 @@
 #include <io/runner.h>
 #include <rdma/request.h>
 
-/** @brief Write data and push RDMA request to queue (with Quiet per write) */
+/**
+ * @brief Write data and push RDMA request to queue (with Quiet per write)
+ *
+ * Blocking mode: waits for completion after each write.
+ */
 template <typename Ctx, typename Request>
 __device__ __forceinline__ void DeviceWrite(Ctx ctx, int target, size_t len, int* __restrict__ data, uint64_t imm) {
   for (size_t idx = threadIdx.x; idx < len; idx += blockDim.x) data[idx] = target + static_cast<int>(idx);

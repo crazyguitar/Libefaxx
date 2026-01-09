@@ -31,8 +31,17 @@ class SymmetricMemory : public BufferType, public rdma::SymmetricMemoryBase<Queu
     rma_iovs_.resize(world_size);
   }
 
+  /**
+   * @brief Get local RMA IOV for a specific channel
+   * @param ch Channel index
+   * @return RMA IOV with address, size, and remote key
+   */
   [[nodiscard]] ib_rma_iov GetLocalRmaIov(size_t ch) noexcept { return BufferType::MakeRmaIov(this->RdmaData(), this->Size(), this->mrs_[ch]); }
 
+  /**
+   * @brief Get local RMA IOVs for all channels
+   * @return Vector of RMA IOVs
+   */
   [[nodiscard]] std::vector<ib_rma_iov> GetLocalRmaIovs() {
     std::vector<ib_rma_iov> iovs;
     iovs.reserve(this->mrs_.size());
@@ -40,31 +49,67 @@ class SymmetricMemory : public BufferType, public rdma::SymmetricMemoryBase<Queu
     return iovs;
   }
 
+  /**
+   * @brief Set remote RMA IOVs for a specific rank
+   * @param rank Remote rank
+   * @param iovs Vector of RMA IOVs from remote rank
+   */
   void SetRemoteRmaIovs(int rank, std::vector<ib_rma_iov> iovs) noexcept {
     ASSERT(rank >= 0 && rank < this->world_size_);
     rma_iovs_[rank] = std::move(iovs);
   }
 
+  /**
+   * @brief Get remote RMA IOV for a specific rank and channel
+   * @param rank Remote rank
+   * @param ch Channel index
+   * @return Reference to RMA IOV
+   */
   [[nodiscard]] const ib_rma_iov& GetRemoteRmaIov(int rank, size_t ch) const noexcept {
     ASSERT(rank >= 0 && rank < this->world_size_ && ch < rma_iovs_[rank].size());
     return rma_iovs_[rank][ch];
   }
 
+  /**
+   * @brief Get all remote RMA IOVs for a specific rank
+   * @param rank Remote rank
+   * @return Reference to vector of RMA IOVs
+   */
   [[nodiscard]] const std::vector<ib_rma_iov>& GetRemoteRmaIovs(int rank) const noexcept {
     ASSERT(rank >= 0 && rank < this->world_size_);
     return rma_iovs_[rank];
   }
 
+  /**
+   * @brief Write to remote rank on specific channel
+   * @param rank Target rank
+   * @param imm_data Immediate data
+   * @param ch Channel index
+   * @return Bytes written
+   */
   [[nodiscard]] Coro<ssize_t> Write(int rank, uint64_t imm_data, size_t ch) {
     const auto& iov = GetRemoteRmaIov(rank, ch);
     return BufferType::Write(rank, iov.addr, iov.key, imm_data, ch);
   }
 
+  /**
+   * @brief Write all to remote rank on specific channel
+   * @param rank Target rank
+   * @param imm_data Immediate data
+   * @param ch Channel index
+   * @return Total bytes written
+   */
   [[nodiscard]] Coro<ssize_t> Writeall(int rank, uint64_t imm_data, size_t ch) {
     const auto& iov = GetRemoteRmaIov(rank, ch);
     return BufferType::Writeall(rank, iov.addr, iov.key, imm_data, ch);
   }
 
+  /**
+   * @brief Write to remote rank across all channels (MultiDMA)
+   * @param rank Target rank
+   * @param imm_data Immediate data (encoded with channel for each chunk)
+   * @return Total bytes written
+   */
   [[nodiscard]] Coro<ssize_t> Writeall(int rank, uint64_t imm_data) {
     const size_t num_channels = this->mrs_.size();
     const size_t total_size = this->Size();
@@ -93,27 +138,35 @@ class SymmetricMemory : public BufferType, public rdma::SymmetricMemoryBase<Queu
     co_return total_written;
   }
 
+  /**
+   * @brief Wait for immediate data from all channels
+   * @param imm_data Base immediate data (encoded with channel for each wait)
+   */
   [[nodiscard]] Coro<> WaitallImmdata(uint64_t imm_data) {
     for (size_t ch = 0; ch < this->mrs_.size(); ++ch) {
       co_await BufferType::WaitImmdata(Base::EncodeImmdata(imm_data, ch));
     }
   }
 
+  /** @brief Send all data to remote rank on specific channel */
   [[nodiscard]] Coro<ssize_t> Sendall(int rank, size_t ch) {
     const auto& iov = GetRemoteRmaIov(rank, ch);
     co_return co_await BufferType::Sendall(rank, iov.addr, iov.key, 1, ch);
   }
 
+  /** @brief Receive all data from remote rank on specific channel */
   [[nodiscard]] Coro<ssize_t> Recvall(int rank, size_t ch) { co_return co_await BufferType::Recvall(rank, 1, ch); }
 
  private:
-  std::vector<std::vector<ib_rma_iov>> rma_iovs_;  // [world_size][num_channels]
+  std::vector<std::vector<ib_rma_iov>> rma_iovs_;  ///< Remote RMA IOVs [world_size][num_channels]
 };
 
+/** @brief Symmetric DMA memory using GPU DMABUF */
 template <typename QueueType = Queue<DeviceRequest>>
 using SymmetricDMAMemoryT = SymmetricMemory<DeviceDMABuffer, QueueType>;
 using SymmetricDMAMemory = SymmetricDMAMemoryT<>;
 
+/** @brief Symmetric host memory */
 template <typename QueueType = Queue<DeviceRequest>>
 using SymmetricHostMemoryT = SymmetricMemory<HostBuffer, QueueType>;
 using SymmetricHostMemory = SymmetricHostMemoryT<>;
