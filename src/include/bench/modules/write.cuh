@@ -151,6 +151,34 @@ struct PairWriteRoundRobin {
 };
 
 /**
+ * @brief Parallel write to all targets using round-robin channels
+ */
+template <typename Peer, typename Selector>
+struct PairWriteRoundRobinAll {
+  template <typename T>
+  void operator()(Peer& peer, typename Peer::template Buffers<T>& write, typename Peer::template Buffers<T>& read) {
+    int rank = peer.mpi.GetWorldRank();
+    int world = peer.mpi.GetWorldSize();
+    size_t nch = peer.efas.size();
+    for (auto& efa : peer.efas) IO::Get().Join<Selector>(efa);
+    Run([&]() -> Coro<> {
+      if (rank == 0) {
+        std::vector<Future<Coro<ssize_t>>> futs;
+        for (int t = 1; t < world; ++t) {
+          size_t ch = t % nch;
+          futs.emplace_back(write[t]->Writeall(t, T::EncodeImmdata(1, ch), ch));
+        }
+        for (auto& f : futs) co_await f;
+      } else {
+        size_t ch = rank % nch;
+        co_await read[0]->WaitImmdata(T::EncodeImmdata(1, ch));
+      }
+      for (auto& efa : peer.efas) IO::Get().Quit<Selector>(efa);
+    }());
+  }
+};
+
+/**
  * @brief Rank 0 writes to all targets in parallel using round-robin channels
  *
  * Each target uses a different channel: ch = target % num_channels
