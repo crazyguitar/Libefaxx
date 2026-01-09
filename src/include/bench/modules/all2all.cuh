@@ -1,6 +1,52 @@
 /**
  * @file all2all.cuh
  * @brief All-to-all RDMA write communication patterns
+ *
+ * This module implements all-to-all communication where every rank sends
+ * data to every other rank simultaneously using RDMA write.
+ *
+ * ## All-to-All Pattern (4 ranks)
+ * ```
+ *        Rank 0    Rank 1    Rank 2    Rank 3
+ *          │         │         │         │
+ *          ├────────►│         │         │  (0→1)
+ *          ├─────────┼────────►│         │  (0→2)
+ *          ├─────────┼─────────┼────────►│  (0→3)
+ *          │◄────────┤         │         │  (1→0)
+ *          │         ├────────►│         │  (1→2)
+ *          │         ├─────────┼────────►│  (1→3)
+ *          │◄────────┼─────────┤         │  (2→0)
+ *          │         │◄────────┤         │  (2→1)
+ *          │         │         ├────────►│  (2→3)
+ *          │◄────────┼─────────┼─────────┤  (3→0)
+ *          │         │◄────────┼─────────┤  (3→1)
+ *          │         │         │◄────────┤  (3→2)
+ *          │         │         │         │
+ *       [All writes happen in parallel]
+ * ```
+ *
+ * ## Channel Distribution (Round-Robin)
+ * ```
+ * ch = (peer + rank) % num_channels
+ *
+ * With 4 ranks, 4 channels:
+ * ┌────────┬─────────────────────────────────────┐
+ * │ Sender │  Target → Channel                   │
+ * ├────────┼─────────────────────────────────────┤
+ * │ Rank 0 │  1→ch1, 2→ch2, 3→ch3                │
+ * │ Rank 1 │  0→ch1, 2→ch3, 3→ch0                │
+ * │ Rank 2 │  0→ch2, 1→ch3, 3→ch1                │
+ * │ Rank 3 │  0→ch3, 1→ch0, 2→ch1                │
+ * └────────┴─────────────────────────────────────┘
+ *
+ * This distributes load evenly across channels.
+ * Simple `peer % num_channels` causes contention!
+ * ```
+ *
+ * ## Modes
+ * - Single:     All writes on one channel (~97 Gbps)
+ * - Multi:      Each write uses all channels (striped)
+ * - RoundRobin: Each peer uses different channel (~400 Gbps aggregate)
  */
 #pragma once
 
@@ -10,6 +56,9 @@
 
 /**
  * @brief All-to-all RDMA write (multi-channel, chunked)
+ *
+ * Each rank writes to all other ranks using all channels (data striped).
+ * Waits for all incoming writes via WaitallImmdata.
  */
 template <typename T>
 Coro<>

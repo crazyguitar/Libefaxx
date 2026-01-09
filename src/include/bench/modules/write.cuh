@@ -1,6 +1,56 @@
 /**
  * @file write.cuh
  * @brief Write benchmark functors for point-to-point RDMA write
+ *
+ * This module provides functors for benchmarking RDMA write operations.
+ * Three modes are supported: single-channel, multi-channel, and round-robin.
+ *
+ * ## Single Channel (PairWrite)
+ * ```
+ * Rank 0                              Rank T (target)
+ * ──────                              ───────────────
+ *    │                                     │
+ *    │  Write(target, imm=1, ch=0)         │
+ *    ├────────────────────────────────────►│
+ *    │         [EFA channel 0]             │
+ *    │                                     │
+ *    │                              WaitImmdata(1)
+ *    │                                     │
+ * ```
+ *
+ * ## Multi Channel (PairWriteMulti)
+ * ```
+ * Rank 0                              Rank T (target)
+ * ──────                              ───────────────
+ *    │                                     │
+ *    │  Writeall(target, imm=1)            │
+ *    ├──┬──┬──┬───────────────────────────►│
+ *    │  │  │  │  [All EFA channels]        │
+ *    │  │  │  │  (data striped)            │
+ *    │                                     │
+ *    │                           WaitallImmdata(1)
+ *    │                                     │
+ * ```
+ *
+ * ## Round-Robin (PairWriteRoundRobinAll)
+ * ```
+ * Rank 0                    Rank 1      Rank 2      Rank 3      Rank 4
+ * ──────                    ──────      ──────      ──────      ──────
+ *    │                         │           │           │           │
+ *    ├─── ch=1%4=1 ───────────►│           │           │           │
+ *    ├─── ch=2%4=2 ────────────┼──────────►│           │           │
+ *    ├─── ch=3%4=3 ────────────┼───────────┼──────────►│           │
+ *    ├─── ch=4%4=0 ────────────┼───────────┼───────────┼──────────►│
+ *    │   [Parallel writes]     │           │           │           │
+ *    │                         │           │           │           │
+ *    │                   WaitImmdata  WaitImmdata  WaitImmdata  WaitImmdata
+ *    │                   (enc(1,1))   (enc(1,2))   (enc(1,3))   (enc(1,0))
+ * ```
+ *
+ * ## Bandwidth Characteristics
+ * - Single:     ~97 Gbps  (1 EFA)
+ * - Multi:      ~97 Gbps  (data striped, same total)
+ * - RoundRobin: ~400 Gbps (4 EFAs parallel, different targets)
  */
 #pragma once
 
