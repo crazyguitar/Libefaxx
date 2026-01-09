@@ -102,6 +102,55 @@ struct PairWriteMulti {
 };
 
 /**
+ * @brief Rank 0 write using round-robin channel selection
+ */
+template <typename Peer>
+struct WriteRoundRobin {
+  int target;
+
+  template <typename T>
+  Coro<> operator()(Peer& peer, typename Peer::template Buffers<T>& write) {
+    if (peer.mpi.GetWorldRank() != 0) co_return;
+    size_t ch = target % peer.efas.size();
+    co_await write[target]->Write(target, 1, ch);
+  }
+};
+
+/**
+ * @brief Target rank wait using round-robin channel
+ */
+template <typename Peer>
+struct ReadRoundRobin {
+  int target;
+
+  template <typename T>
+  Coro<> operator()(Peer& peer, typename Peer::template Buffers<T>& read) {
+    if (peer.mpi.GetWorldRank() != target) co_return;
+    co_await read[0]->WaitImmdata(1);
+  }
+};
+
+/**
+ * @brief Combined pair benchmark functor (round-robin channel selection)
+ *
+ * Each target uses channel = target % num_channels, distributing load across EFAs.
+ */
+template <typename Peer, typename Selector>
+struct PairWriteRoundRobin {
+  int target;
+
+  template <typename T>
+  void operator()(Peer& peer, typename Peer::template Buffers<T>& write, typename Peer::template Buffers<T>& read) {
+    for (auto& efa : peer.efas) IO::Get().Join<Selector>(efa);
+    Run([&]() -> Coro<> {
+      co_await WriteRoundRobin<Peer>{target}.template operator()<T>(peer, write);
+      co_await ReadRoundRobin<Peer>{target}.template operator()<T>(peer, read);
+      for (auto& efa : peer.efas) IO::Get().Quit<Selector>(efa);
+    }());
+  }
+};
+
+/**
  * @brief Rank 0 writes to all targets in parallel using round-robin channels
  *
  * Each target uses a different channel: ch = target % num_channels
