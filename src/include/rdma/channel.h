@@ -151,35 +151,100 @@ class Channel : private NoCopy {
 
   EFA* GetEFA() const noexcept { return efa_; }
 
+  /**
+   * @brief Write data to remote memory via RDMA
+   * @param data Local buffer to write from
+   * @param len Number of bytes to write
+   * @param mr Memory region handle
+   * @param addr Remote memory address
+   * @param key Remote memory key
+   * @param imm_data Optional immediate data
+   * @return Bytes written or negative error
+   */
   [[nodiscard]] Coro<ssize_t>
   Write(void* __restrict__ data, size_t len, MR mr, uint64_t addr, typename Backend::key_type key, uint64_t imm_data = 0) {
     co_return co_await Await<false, WriteAwaiter>(data, len, mr, addr, key, imm_data, remote_, efa_);
   }
 
+  /**
+   * @brief Write all data to remote memory in chunks
+   * @param data Local buffer to write from
+   * @param len Total bytes to write
+   * @param mr Memory region handle
+   * @param addr Remote memory address
+   * @param key Remote memory key
+   * @param imm_data Immediate data (sent with last chunk)
+   * @return Total bytes written or negative error
+   */
   [[nodiscard]] Coro<ssize_t>
   Writeall(void* __restrict__ data, size_t len, MR mr, uint64_t addr, typename Backend::key_type key, uint64_t imm_data = 0) {
     co_return co_await GatherWrite<true>(data, len, mr, addr, key, imm_data);
   }
 
+  /**
+   * @brief Send data to remote peer
+   * @param data Buffer to send
+   * @param len Number of bytes
+   * @param mr Memory region handle
+   * @return Bytes sent or negative error
+   */
   [[nodiscard]] Coro<ssize_t> Send(void* __restrict__ data, size_t len, MR mr) {
     co_return co_await Await<false, SendAwaiter>(data, len, mr, 0, typename Backend::key_type{}, 0, remote_, efa_);
   }
 
+  /**
+   * @brief Receive data from remote peer
+   * @param data Buffer to receive into
+   * @param len Maximum bytes to receive
+   * @param mr Memory region handle
+   * @return Bytes received or negative error
+   */
   [[nodiscard]] Coro<ssize_t> Recv(void* __restrict__ data, size_t len, MR mr) { co_return co_await Await<false, RecvAwaiter>(data, len, mr, efa_); }
 
+  /**
+   * @brief Send all data in chunks
+   * @param data Buffer to send
+   * @param len Total bytes to send
+   * @param mr Memory region handle
+   * @return Total bytes sent or negative error
+   */
   [[nodiscard]] Coro<ssize_t> Sendall(void* __restrict__ data, size_t len, MR mr) {
     co_return co_await Gather<true, SendAwaiter>(data, len, mr, 0, typename Backend::key_type{}, 0, remote_, efa_);
   }
 
+  /**
+   * @brief Receive all data in chunks
+   * @param data Buffer to receive into
+   * @param len Total bytes to receive
+   * @param mr Memory region handle
+   * @return Total bytes received or negative error
+   */
   [[nodiscard]] Coro<ssize_t> Recvall(void* __restrict__ data, size_t len, MR mr) {
     co_return co_await Gather<true, RecvAwaiter>(data, len, mr, efa_);
   }
 
-  // IB-specific: Sendall/Recvall with remote RMA info
+  /**
+   * @brief Send all with RMA info (IB-specific)
+   * @param data Buffer to send
+   * @param len Total bytes
+   * @param mr Memory region handle
+   * @param addr Remote address
+   * @param key Remote key
+   * @param imm_data Immediate data
+   * @return Total bytes sent
+   */
   [[nodiscard]] Coro<ssize_t> Sendall(void* __restrict__ data, size_t len, MR mr, uint64_t addr, typename Backend::key_type key, uint64_t imm_data) {
     co_return co_await GatherSend<true>(data, len, mr, addr, key, imm_data);
   }
 
+  /**
+   * @brief Receive by waiting for immediate data (IB-specific)
+   * @param data Buffer (unused, data written directly by remote)
+   * @param len Expected bytes
+   * @param mr Memory region handle
+   * @param imm_data Expected immediate data
+   * @return len on success
+   */
   [[nodiscard]] Coro<ssize_t> Recvall(void* __restrict__ data, size_t len, MR mr, uint64_t imm_data) {
     co_await ImmdataAwaiter<Selector, ImmContext>{imm_data};
     co_return static_cast<ssize_t>(len);

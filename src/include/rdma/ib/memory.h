@@ -111,7 +111,9 @@ class SymmetricMemory : public BufferType, public rdma::SymmetricMemoryBase<Queu
    * @return Total bytes written
    */
   [[nodiscard]] Coro<ssize_t> Writeall(int rank, uint64_t imm_data) {
-    const size_t num_channels = this->mrs_.size();
+    ASSERT(rank >= 0 && rank < this->world_size_);
+    ASSERT(!this->channels_[rank].empty());
+    const size_t num_channels = this->channels_[rank].size();
     const size_t total_size = this->Size();
     const size_t chunk_size = total_size / num_channels;
     const auto& remote_rma = GetRemoteRmaIovs(rank);
@@ -123,6 +125,7 @@ class SymmetricMemory : public BufferType, public rdma::SymmetricMemoryBase<Queu
     for (size_t ch = 0; ch < num_channels; ++ch) {
       size_t offset = ch * chunk_size;
       size_t len = (ch == num_channels - 1) ? (total_size - offset) : chunk_size;
+      ASSERT(ch < this->mrs_.size());
       auto* mr = this->mrs_[ch];
       auto addr = remote_rma[ch].addr + offset;
       auto key = remote_rma[ch].key;
@@ -143,7 +146,8 @@ class SymmetricMemory : public BufferType, public rdma::SymmetricMemoryBase<Queu
    * @param imm_data Base immediate data (encoded with channel for each wait)
    */
   [[nodiscard]] Coro<> WaitallImmdata(uint64_t imm_data) {
-    for (size_t ch = 0; ch < this->mrs_.size(); ++ch) {
+    const size_t num_channels = this->mrs_.size();
+    for (size_t ch = 0; ch < num_channels; ++ch) {
       co_await BufferType::WaitImmdata(Base::EncodeImmdata(imm_data, ch));
     }
   }
