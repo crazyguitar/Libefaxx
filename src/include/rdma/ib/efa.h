@@ -1,27 +1,83 @@
 /**
- * @file efa.h
- * @brief EFA (Elastic Fabric Adapter) ibverbs initialization and management
- *
- * This is a copy of rdma/fabric/efa.h but uses ibverbs-based ib_* functions
- * instead of libfabric fi_* functions.
+ * @file ib/efa.h
+ * @brief IB (ibverbs) EFA device management and Backend traits
  */
 #pragma once
 
 #include <hwloc.h>
 #include <io/common.h>
 #include <rdma/efa.h>
+#include <rdma/ib/context.h>
 #include <rdma/ib/ib.h>
 
-using rdma::kAddrSize;
-using rdma::kMaxAddrSize;
+#include <climits>
+#include <vector>
 
 namespace ib {
 
+// Forward declarations
+class EFA;
+class IBSelector;
+
+// Use IB-specific context types directly (defined in rdma/ib/context.h)
+// Note: ib::Context and ib::ImmContext are non-templated for nvcc compatibility
+
 /**
- * @brief Singleton for EFA device information discovery via ibverbs
+ * @brief IB Backend traits for unified Channel/Buffer/Memory
+ */
+struct Backend {
+  using efa_type = EFA;
+  using mr_type = ib_mr*;
+  using cq_type = ib_cq*;
+  using cq_entry_type = ib_cq_data_entry;
+  using rma_iov_type = ib_rma_iov;
+  using context_type = Context;
+  using imm_context_type = ImmContext;
+  using selector_type = IBSelector;
+  using key_type = uint32_t;
+  using remote_addr_type = struct {
+    ibv_ah* ah;
+    uint32_t qpn;
+    uint32_t qkey;
+  };
+
+  static constexpr remote_addr_type kInvalidAddr = {nullptr, 0, 0};
+  static constexpr bool kNeedsRmaForSend = true;
+
+  // MR operations
+  static uint32_t GetRkey(mr_type mr) { return ib_mr_rkey(mr); }
+  static uint32_t GetLkey(mr_type mr) { return ib_mr_lkey(mr); }
+  static void CloseMR(mr_type mr) { ib_mr_close(mr); }
+
+  // RMA IOV
+  static rma_iov_type MakeRmaIov(uint64_t addr, size_t size, mr_type mr) { return {addr, size, ib_mr_rkey(mr)}; }
+
+  // Connection
+  static remote_addr_type Connect(EFA* efa, const char* addr);
+  static void Disconnect(EFA* efa, remote_addr_type& remote);
+
+  // Post operations
+  static ssize_t
+  PostWrite(EFA* efa, void* data, size_t len, mr_type mr, uint64_t addr, key_type key, uint64_t imm, remote_addr_type remote, Context* ctx);
+  static ssize_t
+  PostSend(EFA* efa, void* data, size_t len, mr_type mr, uint64_t addr, key_type key, uint64_t imm, remote_addr_type remote, Context* ctx);
+  static ssize_t PostRecv(EFA* efa, void* data, size_t len, mr_type mr, Context* ctx) { return -ENOTSUP; }  // IB uses imm_data wait
+
+  // Completion length
+  static ssize_t GetWriteLen(const Context& ctx, size_t req_size) { return static_cast<ssize_t>(req_size); }
+  static ssize_t GetSendLen(const Context& ctx, size_t req_size) { return static_cast<ssize_t>(req_size); }
+  static ssize_t GetRecvLen(const Context& ctx) { return ctx.entry.len; }
+};
+
+/**
+ * @brief Singleton for IB EFA device enumeration
+ *
+ * Discovers and caches ibverbs EFA devices at startup.
+ * EFA devices may be named "efa*" or "rdmap*" depending on driver version.
  */
 class EFAInfo : private NoCopy {
  public:
+  /** @brief Get cached list of EFA device info */
   static std::vector<ib_info>& Get() {
     static EFAInfo instance;
     return instance.infos_;
@@ -29,25 +85,16 @@ class EFAInfo : private NoCopy {
 
  private:
   EFAInfo() {
-    int num = 0;
-    ibv_device** list = ibv_get_device_list(&num);
-    if (!list) return;
-
-    for (int i = 0; i < num; ++i) {
-      const char* name = ibv_get_device_name(list[i]);
-      bool is_efa = (strncmp(name, "rdmap", 5) == 0 || strncmp(name, "efa", 3) == 0);
-      if (!is_efa) {
-        auto* ctx = ibv_open_device(list[i]);
-        if (ctx) {
-          ibv_device_attr attr{};
-          is_efa = (ibv_query_device(ctx, &attr) == 0 && attr.vendor_id == 0x1d0f);
-          ibv_close_device(ctx);
-        }
-      }
-      if (is_efa) {
+    int num_devices = 0;
+    list_ = ibv_get_device_list(&num_devices);
+    if (list_) {
+      for (int i = 0; i < num_devices; ++i) {
+        const char* name = ibv_get_device_name(list_[i]);
+        // EFA devices can be named "efa*" or "rdmap*" depending on driver
+        if (strstr(name, "efa") == nullptr && strstr(name, "rdmap") == nullptr) continue;
         ib_info info{};
-        info.dev = list[i];
-        info.ctx = ibv_open_device(list[i]);
+        info.dev = list_[i];
+        info.ctx = ibv_open_device(list_[i]);
         if (info.ctx) {
           ibv_query_device(info.ctx, &info.attr);
           ibv_query_port(info.ctx, 1, &info.port);
@@ -56,7 +103,6 @@ class EFAInfo : private NoCopy {
         }
       }
     }
-    list_ = list;
   }
 
   ~EFAInfo() {
@@ -66,6 +112,7 @@ class EFAInfo : private NoCopy {
     if (list_) ibv_free_device_list(list_);
   }
 
+  /** @brief Parse PCI address from ibverbs device sysfs path */
   static bool ParsePCI(ibv_device* dev, unsigned& domain, unsigned& bus, unsigned& slot, unsigned& func) {
     char sym[PATH_MAX], real[PATH_MAX];
     snprintf(sym, sizeof(sym), "%s/device", dev->ibdev_path);
@@ -78,68 +125,44 @@ class EFAInfo : private NoCopy {
   std::vector<ib_info> infos_;
 
  public:
-  friend std::ostream& operator<<(std::ostream& os, const EFAInfo& efa) {
-    for (auto& info : efa.infos_) {
-      os << fmt::format("device: {}\n", ibv_get_device_name(info.dev));
-      os << fmt::format("  vendor_id: 0x{:04x}\n", info.attr.vendor_id);
-      os << fmt::format("  max_qp: {}\n", info.attr.max_qp);
-      os << fmt::format("  max_cq: {}\n", info.attr.max_cq);
-    }
-    return os;
-  }
+  friend class EFA;
 };
 
 /**
- * @brief EFA (Elastic Fabric Adapter) wrapper for ibverbs operations
- *
- * Manages ibverbs resources including domain, endpoint, completion queue,
- * and address vector. Supports move semantics for efficient resource transfer.
+ * @brief IB EFA device wrapper
  */
 class EFA : private NoCopy {
  public:
   EFA() = delete;
 
+  EFA(hwloc_obj_t efa) {
+    efa_ = Get(efa);
+    if (!efa_) throw std::runtime_error("IB EFA device not found for hwloc object");
+    Open(efa_);
+  }
+
   EFA(EFA&& other) noexcept
-      : efa_{other.efa_},
+      : efa_{std::exchange(other.efa_, nullptr)},
         domain_{std::exchange(other.domain_, nullptr)},
-        ep_{std::exchange(other.ep_, nullptr)},
         cq_{std::exchange(other.cq_, nullptr)},
-        av_{std::exchange(other.av_, nullptr)} {
+        av_{std::exchange(other.av_, nullptr)},
+        ep_{std::exchange(other.ep_, nullptr)} {
     std::memcpy(addr_, other.addr_, sizeof(addr_));
     std::memset(other.addr_, 0, sizeof(other.addr_));
   }
 
-  EFA& operator=(EFA&& other) noexcept {
-    if (this != &other) {
-      efa_ = other.efa_;
-      domain_ = std::exchange(other.domain_, nullptr);
-      ep_ = std::exchange(other.ep_, nullptr);
-      cq_ = std::exchange(other.cq_, nullptr);
-      av_ = std::exchange(other.av_, nullptr);
-      std::memcpy(addr_, other.addr_, sizeof(addr_));
-      std::memset(other.addr_, 0, sizeof(other.addr_));
-    }
-    return *this;
-  }
-
-  EFA(hwloc_obj_t efa) {
-    efa_ = Get(efa);
-    ASSERT(efa_ != nullptr);
-    Open(efa_);
-  }
-
   ~EFA() noexcept {
-    if (cq_) {
-      ib_cq_close(cq_);
-      cq_ = nullptr;
+    if (ep_) {
+      ib_ep_close(ep_);
+      ep_ = nullptr;
     }
     if (av_) {
       ib_av_close(av_);
       av_ = nullptr;
     }
-    if (ep_) {
-      ib_ep_close(ep_);
-      ep_ = nullptr;
+    if (cq_) {
+      ib_cq_close(cq_);
+      cq_ = nullptr;
     }
     if (domain_) {
       ib_domain_close(domain_);
@@ -148,31 +171,25 @@ class EFA : private NoCopy {
   }
 
   const char* GetAddr() const noexcept { return addr_; }
-
-  [[nodiscard]] ib_cq* GetCQ() noexcept { return cq_; }
-  [[nodiscard]] ib_av* GetAV() noexcept { return av_; }
-  [[nodiscard]] ib_domain* GetDomain() noexcept { return domain_; }
-  [[nodiscard]] ib_ep* GetEP() noexcept { return ep_; }
-  [[nodiscard]] ib_info* GetInfo() noexcept { return efa_; }
+  ib_cq* GetCQ() noexcept { return cq_; }
+  ib_av* GetAV() noexcept { return av_; }
+  ib_domain* GetDomain() noexcept { return domain_; }
+  ib_ep* GetEP() noexcept { return ep_; }
 
   static std::string Addr2Str(const char* addr) { return rdma::Addr2Str(addr); }
-  static void Str2Addr(const std::string& addr, char* bytes) noexcept { rdma::Str2Addr(addr, bytes); }
 
  private:
-  static bool ParsePCI(ibv_device* dev, unsigned& domain, unsigned& bus, unsigned& slot, unsigned& func) {
-    char sym[PATH_MAX], real[PATH_MAX];
-    snprintf(sym, sizeof(sym), "%s/device", dev->ibdev_path);
-    if (!realpath(sym, real)) return false;
-    const char* p = strrchr(real, '/');
-    return p && sscanf(++p, "%x:%x:%x.%x", &domain, &bus, &slot, &func) == 4;
-  }
-
+  /**
+   * @brief Find IB device matching hwloc PCI object
+   * @param efa hwloc object representing an EFA device
+   * @return Pointer to matching ib_info or nullptr if not found
+   */
   ib_info* Get(hwloc_obj_t efa) {
     auto& infos = EFAInfo::Get();
+    auto hw = efa->attr->pcidev;
     for (auto& info : infos) {
       unsigned domain, bus, slot, func;
-      if (ParsePCI(info.dev, domain, bus, slot, func)) {
-        auto hw = efa->attr->pcidev;
+      if (EFAInfo::ParsePCI(info.dev, domain, bus, slot, func)) {
         if (domain == hw.domain && bus == hw.bus && slot == hw.dev && func == hw.func) {
           return &info;
         }
@@ -181,6 +198,7 @@ class EFA : private NoCopy {
     return nullptr;
   }
 
+  /** @brief Initialize IB resources (domain, CQ, AV, endpoint) */
   void Open(ib_info* info) {
     IB_CHECK(ib_domain_open(info, &domain_) == 0);
     IB_CHECK(ib_cq_open(domain_, &cq_) == 0);
@@ -189,25 +207,51 @@ class EFA : private NoCopy {
     ib_ep_bind(ep_, cq_, 0);
     ib_ep_bind(ep_, av_, 0);
     IB_CHECK(ib_enable(ep_) == 0);
-
     size_t len = sizeof(addr_);
     IB_CHECK(ib_getname(ep_, domain_, addr_, &len) == 0);
   }
 
  private:
-  friend std::ostream& operator<<(std::ostream& os, const EFA& efa) {
-    os << fmt::format("device: {}\n", ibv_get_device_name(efa.efa_->dev));
-    os << fmt::format("  vendor_id: 0x{:04x}\n", efa.efa_->attr.vendor_id);
-    return os;
-  }
-
- private:
   ib_info* efa_ = nullptr;
   ib_domain* domain_ = nullptr;
-  ib_ep* ep_ = nullptr;
   ib_cq* cq_ = nullptr;
   ib_av* av_ = nullptr;
-  char addr_[kMaxAddrSize] = {0};
+  ib_ep* ep_ = nullptr;
+  char addr_[kMaxAddrSize] = {};
 };
+
+// Backend implementation
+inline Backend::remote_addr_type Backend::Connect(EFA* efa, const char* addr) {
+  auto* av = efa->GetAV();
+  ibv_ah* ah = ib_av_insert(av, addr);
+  ASSERT(ah);
+  return {ah, ib_addr_qpn(addr), ib_addr_qkey(addr)};
+}
+
+inline void Backend::Disconnect(EFA* efa, remote_addr_type& remote) {
+  if (remote.ah) {
+    ibv_destroy_ah(remote.ah);
+    remote.ah = nullptr;
+  }
+}
+
+inline ssize_t
+Backend::PostWrite(EFA* efa, void* data, size_t len, mr_type mr, uint64_t addr, key_type key, uint64_t imm, remote_addr_type remote, Context* ctx) {
+  iovec iov{data, len};
+  uint32_t lkey = ib_mr_lkey(mr);
+  ib_rma_iov rma_iov{addr, len, key};
+  ib_msg_rma msg{&iov, &lkey, 1, &rma_iov, 1, remote.ah, remote.qpn, remote.qkey, ctx, imm};
+  uint64_t flags = imm ? IB_REMOTE_CQ_DATA : 0;
+  return ib_writemsg(efa->GetEP(), &msg, flags);
+}
+
+inline ssize_t
+Backend::PostSend(EFA* efa, void* data, size_t len, mr_type mr, uint64_t addr, key_type key, uint64_t imm, remote_addr_type remote, Context* ctx) {
+  iovec iov{data, len};
+  uint32_t lkey = ib_mr_lkey(mr);
+  ib_rma_iov rma_iov{addr, len, key};
+  ib_msg_rma msg{&iov, &lkey, 1, &rma_iov, 1, remote.ah, remote.qpn, remote.qkey, ctx, imm};
+  return ib_sendmsg(efa->GetEP(), &msg, 0);
+}
 
 }  // namespace ib

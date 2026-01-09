@@ -6,7 +6,6 @@
 
 #include <io/coro.h>
 #include <io/runner.h>
-#include <rdma/fabric/selector.h>
 
 /**
  * @brief Rank 0 write functor (single channel)
@@ -68,18 +67,18 @@ struct ReadMulti {
 /**
  * @brief Combined pair benchmark functor (single channel)
  */
-template <typename Peer>
+template <typename Peer, typename Selector>
 struct PairWrite {
   int target;
   int channel;
 
   template <typename T>
   void operator()(Peer& peer, typename Peer::template Buffers<T>& write, typename Peer::template Buffers<T>& read) {
-    for (auto& efa : peer.efas) IO::Get().Join<fi::FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<Selector>(efa);
     Run([&]() -> Coro<> {
       co_await Write<Peer>{target, channel}.template operator()<T>(peer, write);
       co_await Read<Peer>{target}.template operator()<T>(peer, read);
-      for (auto& efa : peer.efas) IO::Get().Quit<fi::FabricSelector>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<Selector>(efa);
     }());
   }
 };
@@ -87,17 +86,17 @@ struct PairWrite {
 /**
  * @brief Combined pair benchmark functor (multi-channel)
  */
-template <typename Peer>
+template <typename Peer, typename Selector>
 struct PairWriteMulti {
   int target;
 
   template <typename T>
   void operator()(Peer& peer, typename Peer::template Buffers<T>& write, typename Peer::template Buffers<T>& read) {
-    for (auto& efa : peer.efas) IO::Get().Join<fi::FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<Selector>(efa);
     Run([&]() -> Coro<> {
       co_await WriteMulti<Peer>{target}.template operator()<T>(peer, write);
       co_await ReadMulti<Peer>{target}.template operator()<T>(peer, read);
-      for (auto& efa : peer.efas) IO::Get().Quit<fi::FabricSelector>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<Selector>(efa);
     }());
   }
 };

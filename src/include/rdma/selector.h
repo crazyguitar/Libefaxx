@@ -17,6 +17,13 @@ template <typename ImmCtx>
 struct ImmEntry {
   ImmCtx* ctx{nullptr};
   int pending{0};
+
+  ImmEntry() noexcept = default;
+  ~ImmEntry() noexcept = default;
+  ImmEntry(const ImmEntry&) noexcept = default;
+  ImmEntry(ImmEntry&&) noexcept = default;
+  ImmEntry& operator=(const ImmEntry&) noexcept = default;
+  ImmEntry& operator=(ImmEntry&&) noexcept = default;
 };
 
 template <typename ImmCtx>

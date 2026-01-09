@@ -4,7 +4,7 @@
  */
 #pragma once
 
-#include <bench/mpi/fabric.cuh>
+#include <device/common.cuh>
 
 /** @brief IPC verify kernel - check data on GPU */
 __global__ void IPCVerifyKernel(const int* __restrict__ data, int expected, size_t len, int* __restrict__ result) {

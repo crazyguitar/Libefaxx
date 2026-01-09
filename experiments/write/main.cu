@@ -18,10 +18,6 @@
 struct SingleLinkBW {};
 struct TotalLinkBW {};
 
-// ============================================================================
-// Verification Functors
-// ============================================================================
-
 /** @brief Pair-aware verification for RDMA write (only target receives) */
 struct WriteVerifyGPU {
   int target;
@@ -51,10 +47,6 @@ struct WriteVerifyCPU {
     if (VerifyBufferData(host_buf, 0, rank, 0) > 0) throw std::runtime_error("Verification failed");
   }
 };
-
-// ============================================================================
-// Libfabric Write Functors
-// ============================================================================
 
 /** @brief Rank 0 write functor for libfabric */
 struct FabricWrite {
@@ -95,10 +87,6 @@ struct FabricPairWrite {
   }
 };
 
-// ============================================================================
-// IBVerbs Write Functors
-// ============================================================================
-
 /** @brief Rank 0 write functor for ibverbs */
 struct IBWrite {
   int target;
@@ -137,10 +125,6 @@ struct IBPairWrite {
     }());
   }
 };
-
-// ============================================================================
-// Test Configurations
-// ============================================================================
 
 /** @brief Libfabric test configuration */
 template <const char* Name, typename BufType, typename Verify, typename BWType = SingleLinkBW>
