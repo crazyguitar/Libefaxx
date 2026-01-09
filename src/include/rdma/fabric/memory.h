@@ -203,6 +203,9 @@ class SymmetricMemory : public BufferType {
     }
   }
 
+  /** @brief Sendall with rank param for API compatibility with IB (rank ignored for fabric) */
+  [[nodiscard]] Coro<ssize_t> Sendall(int /*rank*/, size_t ch) { co_return co_await BufferType::Sendall(ch); }
+
   /** @brief Get queue pointer for CUDA kernel access */
   [[nodiscard]] QueueType* GetQueue() noexcept { return &queue_; }
 

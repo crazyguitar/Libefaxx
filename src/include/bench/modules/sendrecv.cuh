@@ -6,24 +6,23 @@
 
 #include <io/coro.h>
 #include <io/runner.h>
-#include <rdma/fabric/selector.h>
 
 /**
  * @brief Rank 0 send/recv functor
  */
-template <typename Peer>
+template <typename Peer, typename Selector>
 struct SendRecv {
-  int target;   ///< Target rank to communicate with
-  int channel;  ///< EFA channel to use
+  int target;
+  int channel;
 
   template <typename T>
   void operator()(Peer& peer, typename Peer::template Buffers<T>& send, typename Peer::template Buffers<T>& recv) {
     if (peer.mpi.GetWorldRank() != 0) return;
-    for (auto& efa : peer.efas) IO::Get().Join<fi::FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<Selector>(efa);
     Run([&]() -> Coro<> {
-      co_await send[target]->Sendall(channel);
+      co_await send[target]->Sendall(target, channel);
       co_await recv[target]->Recvall(channel);
-      for (auto& efa : peer.efas) IO::Get().Quit<fi::FabricSelector>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<Selector>(efa);
     }());
   }
 };
@@ -31,19 +30,19 @@ struct SendRecv {
 /**
  * @brief Target rank recv/send functor
  */
-template <typename Peer>
+template <typename Peer, typename Selector>
 struct RecvSend {
-  int target;   ///< This rank's ID (only this rank executes)
-  int channel;  ///< EFA channel to use
+  int target;
+  int channel;
 
   template <typename T>
   void operator()(Peer& peer, typename Peer::template Buffers<T>& send, typename Peer::template Buffers<T>& recv) {
     if (peer.mpi.GetWorldRank() != target) return;
-    for (auto& efa : peer.efas) IO::Get().Join<fi::FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<Selector>(efa);
     Run([&]() -> Coro<> {
       co_await recv[0]->Recvall(channel);
-      co_await send[0]->Sendall(channel);
-      for (auto& efa : peer.efas) IO::Get().Quit<fi::FabricSelector>(efa);
+      co_await send[0]->Sendall(0, channel);
+      for (auto& efa : peer.efas) IO::Get().Quit<Selector>(efa);
     }());
   }
 };
@@ -51,14 +50,14 @@ struct RecvSend {
 /**
  * @brief Combined pair benchmark functor
  */
-template <typename Peer>
+template <typename Peer, typename Selector>
 struct PairBench {
-  int target;   ///< Target rank to communicate with
-  int channel;  ///< EFA channel to use
+  int target;
+  int channel = 0;
 
   template <typename T>
   void operator()(Peer& peer, typename Peer::template Buffers<T>& send, typename Peer::template Buffers<T>& recv) {
-    SendRecv<Peer>{target, channel}.template operator()<T>(peer, send, recv);
-    RecvSend<Peer>{target, channel}.template operator()<T>(peer, send, recv);
+    SendRecv<Peer, Selector>{target, channel}.template operator()<T>(peer, send, recv);
+    RecvSend<Peer, Selector>{target, channel}.template operator()<T>(peer, send, recv);
   }
 };

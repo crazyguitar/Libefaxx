@@ -9,6 +9,7 @@
 #include <rdma/ib/request.h>
 
 #include <algorithm>
+#include <iostream>
 #include <queue/queue.cuh>
 #include <type_traits>
 
@@ -117,6 +118,13 @@ class SymmetricMemory : public BufferType {
       co_await BufferType::WaitImmdata(EncodeImmdata(imm_data, ch));
     }
   }
+
+  [[nodiscard]] Coro<ssize_t> Sendall(int rank, size_t ch) {
+    const auto& iov = GetRemoteRmaIov(rank, ch);
+    co_return co_await BufferType::Sendall(iov.addr, iov.key, 1, ch);
+  }
+
+  [[nodiscard]] Coro<ssize_t> Recvall(size_t ch) { co_return co_await BufferType::Recvall(1, ch); }
 
   [[nodiscard]] QueueType* GetQueue() noexcept { return &queue_; }
   [[nodiscard]] uint64_t* GetPosted() noexcept { return posted_; }

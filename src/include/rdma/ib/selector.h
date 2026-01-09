@@ -49,7 +49,7 @@ inline ssize_t ib_cq_read(ib_cq* cq, ib_cq_data_entry* entries, size_t max_entri
       entries[count].len = ibv_wc_read_byte_len(cq_ex);
       entries[count].buf = nullptr;
       entries[count].data = 0;
-      if (flags & IBV_WC_WITH_IMM) {
+      if (is_recv_rdma_imm || (flags & IBV_WC_WITH_IMM)) {
         entries[count].data = ntohl(ibv_wc_read_imm_data(cq_ex));
       }
       ++count;
@@ -82,10 +82,14 @@ class IBSelector : public detail::Selector {
   }
 
   template <typename E>
-  void Join(E& efa) noexcept { cqs_.emplace(efa.GetCQ()); }
+  void Join(E& efa) noexcept {
+    cqs_.emplace(efa.GetCQ());
+  }
 
   template <typename E>
-  void Quit(E& efa) noexcept { cqs_.erase(efa.GetCQ()); }
+  void Quit(E& efa) noexcept {
+    cqs_.erase(efa.GetCQ());
+  }
 
   bool Join(ImmContext& ctx) { return rdma::JoinImm(imm_, ctx); }
   void Quit(ImmContext& ctx) { rdma::QuitImm(imm_, ctx); }
