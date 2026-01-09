@@ -78,7 +78,7 @@ void HandleImmdata(CQEntry& entry, std::vector<Event>& ret, ImmContextMap<ImmCtx
   auto& e = imm[imm_data];
   if (e.ctx && e.ctx->handle) {
     e.ctx->entry = entry;
-    ret.emplace_back(Event{static_cast<int>(entry.flags), e.ctx->handle});
+    ret.emplace_back(Event{-1, entry.flags, e.ctx->handle});
     e.ctx = nullptr;
   } else {
     e.pending++;
