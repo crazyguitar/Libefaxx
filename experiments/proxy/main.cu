@@ -15,9 +15,10 @@
 
 template <
     typename Peer,
+    typename Selector,
     bool MultiChannel,
-    template <typename, bool, template <typename> class> class Writer = ProxyWrite,
-    template <typename> class Launcher = KernelBlocking>
+    template <typename, typename, bool, template <typename, typename> class> class Writer = ProxyWrite,
+    template <typename, typename> class Launcher = KernelBlocking>
 struct ProxyBench {
   int iters, target;
 
@@ -28,8 +29,8 @@ struct ProxyBench {
     if (rank != 0 && rank != target) return {size, 0, 0, 0};
 
     auto start = std::chrono::high_resolution_clock::now();
-    Writer<Peer, MultiChannel, Launcher>{iters, target}(peer, write);
-    ProxyRead<Peer, MultiChannel>{iters}(peer, read);
+    Writer<Peer, Selector, MultiChannel, Launcher>{iters, target}(peer, write);
+    ProxyRead<Peer, Selector, MultiChannel>{iters}(peer, read);
     auto end = std::chrono::high_resolution_clock::now();
 
     double time_us = std::chrono::duration<double, std::micro>(end - start).count();
@@ -39,7 +40,7 @@ struct ProxyBench {
   }
 };
 
-template <typename BufType, bool MultiChannel, template <typename> class Launcher = KernelBlocking>
+template <typename BufType, bool MultiChannel, template <typename, typename> class Launcher = KernelBlocking>
 struct Test {
   static BenchResult Run(size_t size, const Options& opts, double single_bw, double total_bw) {
     FabricBench peer;
@@ -52,7 +53,7 @@ struct Test {
     double sum_bw = 0, sum_time = 0;
     int world = peer.mpi.GetWorldSize();
     for (int t = 1; t < world; ++t) {
-      auto r = ProxyBench<FabricBench, MultiChannel, ProxyWrite, Launcher>{opts.repeat, t}.Run(peer, write, read);
+      auto r = ProxyBench<FabricBench, fi::FabricSelector, MultiChannel, ProxyWrite, Launcher>{opts.repeat, t}.Run(peer, write, read);
       sum_bw += r.bw_gbps;
       sum_time += r.time_us;
     }
@@ -75,9 +76,9 @@ std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& o
 }
 
 // Queue type aliases
-using ManagedMem = fi::SymmetricDMAMemoryT<Queue<fi::DeviceRequest>>;
-using PinnedMem = fi::SymmetricDMAMemoryT<PinnedQueue<fi::DeviceRequest>>;
-using GdrMem = fi::SymmetricDMAMemoryT<GdrQueue<fi::DeviceRequest>>;
+using ManagedMem = fi::SymmetricDMAMemoryT<Queue<rdma::DeviceRequest>>;
+using PinnedMem = fi::SymmetricDMAMemoryT<PinnedQueue<rdma::DeviceRequest>>;
+using GdrMem = fi::SymmetricDMAMemoryT<GdrQueue<rdma::DeviceRequest>>;
 
 // Single channel - Blocking mode
 using ManagedBlocking = Test<ManagedMem, false, KernelBlocking>;

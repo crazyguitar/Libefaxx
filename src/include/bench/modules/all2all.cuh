@@ -5,7 +5,6 @@
 #pragma once
 
 #include <io/runner.h>
-#include <rdma/fabric/memory.h>
 
 #include <vector>
 

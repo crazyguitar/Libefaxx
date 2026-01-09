@@ -122,7 +122,8 @@ class DeviceDMABuffer : public Buffer {
  public:
   static constexpr size_t kAlign = 4096;
 
-  DeviceDMABuffer(std::vector<std::vector<Channel>>& channels, int device, size_t size, size_t align = kAlign) : Buffer(channels, size), device_{device} {
+  DeviceDMABuffer(std::vector<std::vector<Channel>>& channels, int device, size_t size, size_t align = kAlign)
+      : Buffer(channels, size), device_{device} {
     ASSERT(align > 0 && (align & (align - 1)) == 0);
     const size_t page_size = sysconf(_SC_PAGESIZE);
     const size_t effective_align = std::max(align, page_size);
@@ -191,7 +192,8 @@ class DeviceDMABuffer : public Buffer {
         auto* efa = ch_vec[ch].GetEFA();
         auto* domain = efa->GetDomain();
         ibv_mr* ibv_mr_ptr = ibv_reg_dmabuf_mr(
-            domain->pd, 0, size, reinterpret_cast<uint64_t>(data), dmabuf_fd, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ
+            domain->pd, 0, size, reinterpret_cast<uint64_t>(data), dmabuf_fd,
+            IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ
         );
         if (!ibv_mr_ptr) throw std::runtime_error(fmt::format("ibv_reg_dmabuf_mr failed: {}", strerror(errno)));
         mrs.push_back(new ib_mr{ibv_mr_ptr, domain});

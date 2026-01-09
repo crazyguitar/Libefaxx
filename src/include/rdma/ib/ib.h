@@ -435,10 +435,6 @@ inline uint32_t ib_addr_qkey(const void* addr) {
   return qkey;
 }
 
-// ============================================================================
-// Memory Registration (equivalent to fi_mr_reg)
-// ============================================================================
-
 /** @brief Memory region handle (equivalent to fid_mr) */
 struct ib_mr {
   ibv_mr* mr;     /**< ibverbs memory region */
@@ -492,10 +488,6 @@ inline int ib_mr_close(ib_mr* mr) {
  */
 inline uint32_t ib_mr_lkey(ib_mr* mr) { return mr->mr->lkey; }
 
-// ============================================================================
-// Receive Operations (required for RDMA write with immediate data)
-// ============================================================================
-
 /**
  * @brief Post receive buffer (required for RDMA write with immediate data)
  *
@@ -524,10 +516,6 @@ inline int ib_post_recv(ib_ep* ep, void* context) {
  * @return Remote key
  */
 inline uint32_t ib_mr_rkey(ib_mr* mr) { return mr->mr->rkey; }
-
-// ============================================================================
-// RMA Operations (equivalent to fi_writemsg)
-// ============================================================================
 
 /** @brief RMA IOV structure (equivalent to fi_rma_iov) */
 struct ib_rma_iov {

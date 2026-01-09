@@ -1,9 +1,11 @@
 /**
  * @file buffer.h
- * @brief Shared buffer utilities for RDMA backends
+ * @brief Shared RDMA buffer utilities
+ *
+ * Common awaiter for immediate data operations used by both IB and Fabric buffers
  */
 #pragma once
-#include <io/coro.h>
+
 #include <io/handle.h>
 #include <io/io.h>
 
@@ -11,8 +13,6 @@ namespace rdma {
 
 /**
  * @brief Awaiter for immediate data operations
- * @tparam Selector The selector type (FabricSelector or IBSelector)
- * @tparam ImmCtx The immediate context type
  */
 template <typename Selector, typename ImmCtx>
 struct ImmdataAwaiter {
