@@ -14,12 +14,12 @@ namespace rdma {
 
 /**
  * @brief Context for completion queue operations
- * @tparam CQEntry The backend-specific CQ entry type
+ * @tparam CQEntry The backend-specific CQ entry type (fi_cq_data_entry or ib_cq_data_entry)
  */
 template <typename CQEntry>
 struct Context {
-  CQEntry entry{};
-  Handle* handle{};
+  CQEntry entry{};   ///< Completion queue entry filled by selector
+  Handle* handle{};  ///< Coroutine handle to resume on completion
 
   Context() noexcept = default;
   ~Context() noexcept = default;
@@ -32,13 +32,16 @@ struct Context {
 /**
  * @brief Context for immediate data operations
  * @tparam CQEntry The backend-specific CQ entry type
+ *
+ * Extends Context with immediate data field for RDMA write with immediate.
  */
 template <typename CQEntry>
 struct ImmContext : public Context<CQEntry> {
-  uint64_t imm_data{0};
+  uint64_t imm_data{0};  ///< Expected immediate data value to match
 
   ImmContext() noexcept = default;
   ~ImmContext() noexcept = default;
+  /** @brief Construct with specific immediate data value */
   explicit ImmContext(uint64_t data) noexcept : Context<CQEntry>{}, imm_data(data) {}
   ImmContext(const ImmContext&) noexcept = default;
   ImmContext(ImmContext&&) noexcept = default;

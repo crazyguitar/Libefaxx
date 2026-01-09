@@ -12,17 +12,20 @@ namespace fi {
  * @brief Context for completion queue operations
  */
 struct Context {
-  struct fi_cq_data_entry entry{};
-  Handle* handle{};
+  struct fi_cq_data_entry entry{};  ///< Completion entry filled by selector
+  Handle* handle{};                 ///< Coroutine handle to resume
 };
 
 /**
  * @brief Context for immediate data operations
+ *
+ * Extends Context with immediate data field for RDMA write with immediate.
  */
 struct ImmContext : public Context {
-  uint64_t imm_data{0};
+  uint64_t imm_data{0};  ///< Expected immediate data value
 
   ImmContext() noexcept = default;
+  /** @brief Construct with specific immediate data value */
   explicit ImmContext(uint64_t data) noexcept : Context{}, imm_data(data) {}
 };
 
