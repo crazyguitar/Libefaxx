@@ -109,8 +109,8 @@ struct TestMulti {
   }
 };
 
-/** @brief Round-robin channel test configuration */
-template <const char* Name, typename Peer, typename Selector, typename BufType, typename Verify, typename BWType = SingleLinkBW>
+/** @brief Round-robin channel test configuration (parallel to all targets) */
+template <const char* Name, typename Peer, typename Selector, typename BufType, typename Verify, typename BWType = TotalLinkBW>
 struct TestRoundRobin {
   static BenchResult Run(size_t size, const Options& opts, double single_bw, double total_bw) {
     Peer peer;
@@ -122,19 +122,16 @@ struct TestRoundRobin {
     auto [write, read] = peer.template AllocPair<BufType>(size);
     peer.Handshake(write, read);
 
-    double sum_bw = 0, sum_time = 0;
-    size_t progress_bw = static_cast<size_t>(single_bw * 1e9);
-    for (int t = 1; t < world; ++t) {
-      peer.Warmup(write, read, PairWriteRoundRobin<Peer, Selector>{t}, Verify{t}, opts.warmup);
-      auto r = peer.Bench(Name, write, read, PairWriteRoundRobin<Peer, Selector>{t}, Verify{t}, opts.repeat, 0, progress_bw);
-      sum_bw += r.bw_gbps;
-      sum_time += r.time_us;
-    }
-    int npairs = world - 1;
-    double avg_bw = sum_bw / npairs;
+    auto noop = [](auto&, auto&) {};
+    size_t total_bytes = size * (world - 1);
+    size_t progress_bw = static_cast<size_t>(total_bw * 1e9);
+    peer.Warmup(write, read, PairWriteRoundRobinAll<Peer, Selector>{}, noop, opts.warmup);
+    auto r = peer.Bench(Name, write, read, PairWriteRoundRobinAll<Peer, Selector>{}, noop, opts.repeat, total_bytes, progress_bw);
+
+    double bw = (total_bytes * 8) / (r.time_us * 1e3);  // Gbps
     double link_bw = std::is_same_v<BWType, TotalLinkBW> ? total_bw : single_bw;
-    double bus_bw = (link_bw > 0) ? (avg_bw / link_bw) * 100.0 : 0;
-    return {size, sum_time / npairs, avg_bw, bus_bw};
+    double bus_bw = (link_bw > 0) ? (bw / link_bw) * 100.0 : 0;
+    return {size, r.time_us, bw, bus_bw};
   }
 };
 
