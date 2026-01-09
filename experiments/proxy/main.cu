@@ -137,22 +137,22 @@ int main(int argc, char* argv[]) {
 
     if (rank == 0) {
       FabricBench::Print(
-          "EFA Proxy Write - Single Channel Blocking", nranks, opts.warmup, opts.repeat, single_bw, "GPU -> Queue -> RDMA (sync per op)",
+          "EFA Proxy Write - Single Channel Blocking", nranks, opts.warmup, opts.repeat, "GPU -> Queue -> RDMA (sync per op)",
           {"Managed", "Pinned", "GdrQueue"}, single_blocking
       );
       printf("\n");
       FabricBench::Print(
-          "EFA Proxy Write - Single Channel NBI", nranks, opts.warmup, opts.repeat, single_bw, "GPU -> Queue -> RDMA (batch)",
-          {"Managed", "Pinned", "GdrQueue"}, single_nbi
+          "EFA Proxy Write - Single Channel NBI", nranks, opts.warmup, opts.repeat, "GPU -> Queue -> RDMA (batch)", {"Managed", "Pinned", "GdrQueue"},
+          single_nbi
       );
       printf("\n");
       FabricBench::Print(
-          "EFA Proxy Write - Multi Channel Blocking", nranks, opts.warmup, opts.repeat, total_bw, "GPU -> Queue -> RDMA (sync per op, all EFAs)",
+          "EFA Proxy Write - Multi Channel Blocking", nranks, opts.warmup, opts.repeat, "GPU -> Queue -> RDMA (sync per op, all EFAs)",
           {"Managed", "Pinned", "GdrQueue"}, multi_blocking
       );
       printf("\n");
       FabricBench::Print(
-          "EFA Proxy Write - Multi Channel NBI", nranks, opts.warmup, opts.repeat, total_bw, "GPU -> Queue -> RDMA (batch, all EFAs)",
+          "EFA Proxy Write - Multi Channel NBI", nranks, opts.warmup, opts.repeat, "GPU -> Queue -> RDMA (batch, all EFAs)",
           {"Managed", "Pinned", "GdrQueue"}, multi_nbi
       );
     }

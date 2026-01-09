@@ -42,7 +42,6 @@ class SymmetricMemoryBase {
   ~SymmetricMemoryBase() {
     if (is_device_buffer_) {
       for (auto& [rank, ptr] : ipc_remote_ptrs_) {
-        // Only close handles we opened (not our own data pointer)
         if (ptr && ptr != own_data_ptr_) {
           cudaIpcCloseMemHandle(ptr);
         }

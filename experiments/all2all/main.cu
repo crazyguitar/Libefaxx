@@ -56,10 +56,12 @@ struct All2allRoundRobin {
 /// Test configuration with bandwidth type
 template <const char* Name, typename BufType, typename Func, typename BWType = SingleLinkBW, typename Verify = VerifyGPU>
 struct Test {
-  static BenchResult Run(size_t size, const Options& opts, double single_bw, double total_bw) {
+  static BenchResult Run(size_t size, const Options& opts) {
     FabricBench peer;
     peer.Exchange();
     peer.Connect();
+    double single_bw = peer.GetBandwidth(0) / 1e9;
+    double total_bw = peer.GetTotalBandwidth() / 1e9;
     auto [write, read] = peer.AllocPair<BufType>(size);
     peer.Handshake(write, read);
     peer.Warmup(write, read, Func{}, Verify{}, opts.warmup);
@@ -73,10 +75,10 @@ struct Test {
 
 /// Run multiple test configurations
 template <typename... Tests>
-std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& opts, double single_bw, double total_bw) {
+std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& opts) {
   std::array<BenchResult, sizeof...(Tests)> results;
   size_t i = 0;
-  ((results[i++] = Tests::Run(size, opts, single_bw, total_bw), MPI_Barrier(MPI_COMM_WORLD)), ...);
+  ((results[i++] = Tests::Run(size, opts), MPI_Barrier(MPI_COMM_WORLD)), ...);
   return results;
 }
 
@@ -99,18 +101,14 @@ int main(int argc, char* argv[]) {
     int rank = MPI::Get().GetWorldRank();
     int nranks = MPI::Get().GetWorldSize();
 
-    FabricBench peer;
-    double single_bw = peer.GetBandwidth(0) / 1e9;
-    double total_bw = peer.GetTotalBandwidth() / 1e9;
-
     std::vector<std::array<BenchResult, 5>> results;
     for (auto size : sizes) {
-      results.push_back(RunTests<SingleDMA, MultiDMA, RoundRobinDMA, SinglePin, MultiPin>(size, opts, single_bw, total_bw));
+      results.push_back(RunTests<SingleDMA, MultiDMA, RoundRobinDMA, SinglePin, MultiPin>(size, opts));
     }
 
     if (rank == 0) {
       FabricBench::Print(
-          "EFA RDMA Write Benchmark", nranks, opts.warmup, opts.repeat, single_bw, "all-to-all RDMA write",
+          "EFA RDMA Write Benchmark", nranks, opts.warmup, opts.repeat, "all-to-all RDMA write",
           {"SingleDMA", "MultiDMA", "RoundRobinDMA", "SinglePin", "MultiPin"}, results
       );
     }

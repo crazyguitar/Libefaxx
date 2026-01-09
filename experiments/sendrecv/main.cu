@@ -52,12 +52,13 @@ struct PairVerifyCPU {
  */
 template <const char* Name, typename Peer, typename Selector, typename BufType, typename PairVerify = PairVerifyGPU>
 struct Test {
-  static BenchResult Run(size_t size, const Options& opts, double link_bw) {
+  static BenchResult Run(size_t size, const Options& opts) {
     Peer peer;
     peer.Exchange();
     peer.Connect();
     int rank = peer.mpi.GetWorldRank();
     int world = peer.mpi.GetWorldSize();
+    double link_bw = peer.GetBandwidth(0) / 1e9;
 
     auto send = peer.template Alloc<BufType>(size, rank);
     auto recv = peer.template Alloc<BufType>(size, -1);
@@ -84,14 +85,13 @@ struct Test {
  * @tparam Tests Test types to run
  * @param size Buffer size in bytes
  * @param opts Benchmark options
- * @param link_bw Theoretical link bandwidth in Gbps
  * @return Array of BenchResult for each test type
  */
 template <typename... Tests>
-std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& opts, double link_bw) {
+std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& opts) {
   std::array<BenchResult, sizeof...(Tests)> results;
   size_t i = 0;
-  ((results[i++] = Tests::Run(size, opts, link_bw), MPI_Barrier(MPI_COMM_WORLD)), ...);
+  ((results[i++] = Tests::Run(size, opts), MPI_Barrier(MPI_COMM_WORLD)), ...);
   return results;
 }
 
@@ -112,17 +112,14 @@ int main(int argc, char* argv[]) {
     int rank = MPI::Get().GetWorldRank();
     int nranks = MPI::Get().GetWorldSize();
 
-    FabricBench peer;
-    double link_bw = peer.GetBandwidth(0) / 1e9;
-
     std::vector<std::array<BenchResult, 4>> results;
     for (auto size : sizes) {
-      results.push_back(RunTests<FabricDMA, FabricHost, IBDMA, IBHost>(size, opts, link_bw));
+      results.push_back(RunTests<FabricDMA, FabricHost, IBDMA, IBHost>(size, opts));
     }
 
     if (rank == 0) {
       FabricBench::Print(
-          "EFA SendRecv Benchmark", nranks, opts.warmup, opts.repeat, link_bw, "rank0 <-> rank_k (k=1..N-1), averaged across all pairs",
+          "EFA SendRecv Benchmark", nranks, opts.warmup, opts.repeat, "rank0 <-> rank_k (k=1..N-1), averaged across all pairs",
           {"FabricDMA", "FabricHost", "IBDMA", "IBHost"}, results
       );
     }

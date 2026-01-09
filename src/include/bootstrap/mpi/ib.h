@@ -59,6 +59,14 @@ class Peer : private NoCopy {
     for (auto e : affinity.efas) efas.emplace_back(EFA(e));
   }
 
+  ~Peer() {
+    // Clear channels first (they reference EFAs)
+    channels.clear();
+    // Remove EFA CQs from selector before destroying EFAs
+    for (auto& efa : efas) IO::Get().Quit<IBSelector>(efa);
+    // EFAs will be destroyed after this
+  }
+
   void Exchange() {
     const auto my_rank = mpi.GetWorldRank();
     const auto world_size = mpi.GetWorldSize();

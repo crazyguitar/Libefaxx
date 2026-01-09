@@ -54,12 +54,14 @@ struct WriteVerifyCPU {
 /** @brief Unified test configuration template */
 template <const char* Name, typename Peer, typename Selector, typename BufType, typename Verify, typename BWType = SingleLinkBW>
 struct Test {
-  static BenchResult Run(size_t size, const Options& opts, double single_bw, double total_bw) {
+  static BenchResult Run(size_t size, const Options& opts) {
     Peer peer;
     peer.Exchange();
     peer.Connect();
     int rank = peer.mpi.GetWorldRank();
     int world = peer.mpi.GetWorldSize();
+    double single_bw = peer.GetBandwidth(0) / 1e9;
+    double total_bw = peer.GetTotalBandwidth() / 1e9;
 
     auto [write, read] = peer.template AllocPair<BufType>(size);
     peer.Handshake(write, read);
@@ -83,12 +85,14 @@ struct Test {
 /** @brief Multi-channel test configuration (uses all EFA channels) */
 template <const char* Name, typename Peer, typename Selector, typename BufType, typename Verify, typename BWType = TotalLinkBW>
 struct TestMulti {
-  static BenchResult Run(size_t size, const Options& opts, double single_bw, double total_bw) {
+  static BenchResult Run(size_t size, const Options& opts) {
     Peer peer;
     peer.Exchange();
     peer.Connect();
     int rank = peer.mpi.GetWorldRank();
     int world = peer.mpi.GetWorldSize();
+    double single_bw = peer.GetBandwidth(0) / 1e9;
+    double total_bw = peer.GetTotalBandwidth() / 1e9;
 
     auto [write, read] = peer.template AllocPair<BufType>(size);
     peer.Handshake(write, read);
@@ -112,12 +116,14 @@ struct TestMulti {
 /** @brief Round-robin channel test configuration (parallel to all targets) */
 template <const char* Name, typename Peer, typename Selector, typename BufType, typename Verify, typename BWType = TotalLinkBW>
 struct TestRoundRobin {
-  static BenchResult Run(size_t size, const Options& opts, double single_bw, double total_bw) {
+  static BenchResult Run(size_t size, const Options& opts) {
     Peer peer;
     peer.Exchange();
     peer.Connect();
     int rank = peer.mpi.GetWorldRank();
     int world = peer.mpi.GetWorldSize();
+    double single_bw = peer.GetBandwidth(0) / 1e9;
+    double total_bw = peer.GetTotalBandwidth() / 1e9;
 
     auto [write, read] = peer.template AllocPair<BufType>(size);
     peer.Handshake(write, read);
@@ -136,10 +142,10 @@ struct TestRoundRobin {
 };
 
 template <typename... Tests>
-std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& opts, double single_bw, double total_bw) {
+std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& opts) {
   std::array<BenchResult, sizeof...(Tests)> results;
   size_t i = 0;
-  ((results[i++] = Tests::Run(size, opts, single_bw, total_bw), MPI_Barrier(MPI_COMM_WORLD)), ...);
+  ((results[i++] = Tests::Run(size, opts), MPI_Barrier(MPI_COMM_WORLD)), ...);
   return results;
 }
 
@@ -174,32 +180,29 @@ int main(int argc, char* argv[]) {
     int rank = MPI::Get().GetWorldRank();
     int nranks = MPI::Get().GetWorldSize();
 
-    FabricBench peer;
-    double single_bw = peer.GetBandwidth(0) / 1e9;
-    double total_bw = peer.GetTotalBandwidth() / 1e9;
-
     // Run Fabric tests
-    std::vector<std::array<BenchResult, 4>> fabric_results;
+    std::vector<std::array<BenchResult, 3>> fabric_results;
     for (auto size : sizes) {
-      fabric_results.push_back(RunTests<FabricDMA, FabricHost, FabricMultiDMA, FabricRoundRobin>(size, opts, single_bw, total_bw));
+      fabric_results.push_back(RunTests<FabricDMA, FabricHost, FabricRoundRobin>(size, opts));
     }
 
     // Run IB tests
-    std::vector<std::array<BenchResult, 4>> ib_results;
-    for (auto size : sizes) {
-      ib_results.push_back(RunTests<IBDMA, IBHost, IBMultiDMA, IBRoundRobin>(size, opts, single_bw, total_bw));
-    }
+    // std::vector<std::array<BenchResult, 3>> ib_results;
+    // for (auto size : sizes) {
+    //  ib_results.push_back(RunTests<IBDMA, IBHost, IBRoundRobin>(size, opts));
+    //}
 
     if (rank == 0) {
       FabricBench::Print(
-          "EFA Write Benchmark (Fabric)", nranks, opts.warmup, opts.repeat, single_bw, "rank0 -> rank_k (k=1..N-1), averaged across all pairs",
-          {"FabricDMA", "FabricHost", "FabricMultiDMA", "FabricRoundRobin"}, fabric_results
+          "EFA Write Benchmark (Fabric)", nranks, opts.warmup, opts.repeat, "rank0 -> rank_k (k=1..N-1), averaged across all pairs",
+          {"FabricDMA", "FabricHost", "FabricRoundRobin"}, fabric_results
       );
-      IBBench::Print(
-          "EFA Write Benchmark (IB)", nranks, opts.warmup, opts.repeat, single_bw, "rank0 -> rank_k (k=1..N-1), averaged across all pairs",
-          {"IBDMA", "IBHost", "IBMultiDMA", "IBRoundRobin"}, ib_results
-      );
+      // IBBench::Print(
+      //     "EFA Write Benchmark (IB)", nranks, opts.warmup, opts.repeat, "rank0 -> rank_k (k=1..N-1), averaged across all pairs",
+      //     {"IBDMA", "IBHost", "IBRoundRobin"}, ib_results
+      //);
     }
+    MPI_Barrier(MPI_COMM_WORLD);
     return 0;
   } catch (const std::exception& e) {
     SPDLOG_ERROR("Fatal error: {}", e.what());

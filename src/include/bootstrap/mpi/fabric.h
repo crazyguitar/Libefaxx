@@ -56,6 +56,11 @@ class Peer : private NoCopy {
     for (auto e : affinity.efas) efas.emplace_back(EFA(e));
   }
 
+  ~Peer() {
+    channels.clear();
+    for (auto& efa : efas) IO::Get().Quit<FabricSelector>(efa);
+  }
+
   /** @brief Exchange EFA addresses across all ranks via MPI_Allgather */
   void Exchange() {
     const auto my_rank = mpi.GetWorldRank();
