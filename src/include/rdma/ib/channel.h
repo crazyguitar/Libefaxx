@@ -101,7 +101,7 @@ class Channel : private NoCopy {
  public:
   Channel() = delete;
 
-  Channel(EFA* efa, char* addr) : efa_{efa} {
+  Channel(EFA* efa, const char* addr) : efa_{efa} {
     ASSERT(efa_);
     Connect(addr);
   }
@@ -179,7 +179,7 @@ class Channel : private NoCopy {
     co_return static_cast<ssize_t>(len);
   }
 
-  void Connect(char* addr) {
+  void Connect(const char* addr) {
     auto* av = efa_->GetAV();
     ah_ = ib_av_insert(av, addr);
     ASSERT(ah_);
