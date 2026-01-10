@@ -22,4 +22,6 @@ target_link_libraries(${target} PRIVATE
   "${HWLOC_LIBRARIES}"
   "${NVML_LIBRARIES}"
   "${GDR_LIBRARY}"
+  PkgConfig::IBVerbs
+  PkgConfig::EFAVerbs
 )

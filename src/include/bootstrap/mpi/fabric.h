@@ -24,9 +24,11 @@
  * Manages MPI, EFA endpoints, and RDMA channels. Provides connection setup
  * and RMA handshake for multi-rank communication.
  */
+namespace fi {
+
 class Peer : private NoCopy {
  public:
-  using AddrBuffer = std::array<char, kMaxAddrSize>;
+  using AddrBuffer = std::array<char, rdma::kMaxAddrSize>;
   template <typename T>
   using Buffers = std::vector<std::unique_ptr<T>>;
 
@@ -41,11 +43,10 @@ class Peer : private NoCopy {
     const auto world_size = mpi.GetWorldSize();
     const auto rank = mpi.GetWorldRank();
     device = mpi.GetLocalRank();
-    static bool printed = false;
-    if (rank == 0 && !printed) {
+    if (rank == 0 && !g_device_info_printed) {
       auto& aff = loc.GetGPUAffinity()[device];
       std::cout << fmt::format("CUDA Device {}: \"{}\"\n", device, aff.prop.name) << aff << std::flush;
-      printed = true;
+      g_device_info_printed = true;
     }
     addrs.resize(world_size);
     auto& affinity = loc.GetGPUAffinity()[device];
@@ -55,17 +56,22 @@ class Peer : private NoCopy {
     for (auto e : affinity.efas) efas.emplace_back(EFA(e));
   }
 
+  ~Peer() {
+    channels.clear();
+    for (auto& efa : efas) IO::Get().Quit<FabricSelector>(efa);
+  }
+
   /** @brief Exchange EFA addresses across all ranks via MPI_Allgather */
   void Exchange() {
     const auto my_rank = mpi.GetWorldRank();
     const auto world_size = mpi.GetWorldSize();
-    const size_t total_size = static_cast<size_t>(world_size) * kMaxAddrSize;
+    const size_t total_size = static_cast<size_t>(world_size) * rdma::kMaxAddrSize;
     std::vector<char> recvbuf(total_size, 0);
     for (const auto& e : efas) {
-      MPI_Allgather(e.GetAddr(), kMaxAddrSize, MPI_BYTE, recvbuf.data(), kMaxAddrSize, MPI_BYTE, MPI_COMM_WORLD);
+      MPI_Allgather(e.GetAddr(), rdma::kMaxAddrSize, MPI_BYTE, recvbuf.data(), rdma::kMaxAddrSize, MPI_BYTE, MPI_COMM_WORLD);
       for (int r = 0; r < world_size; ++r) {
         AddrBuffer addr_buf{};
-        std::memcpy(addr_buf.data(), recvbuf.data() + r * kMaxAddrSize, kMaxAddrSize);
+        std::memcpy(addr_buf.data(), recvbuf.data() + r * rdma::kMaxAddrSize, rdma::kMaxAddrSize);
         addrs[r].push_back(std::move(addr_buf));
       }
     }
@@ -219,3 +225,5 @@ class Peer : private NoCopy {
     return total;
   }
 };
+
+}  // namespace fi

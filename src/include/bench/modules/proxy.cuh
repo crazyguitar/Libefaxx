@@ -1,23 +1,68 @@
 /**
  * @file proxy.cuh
  * @brief GPU-Initiated Networking (GIN) module for proxy-based RDMA
+ *
+ * This module implements GPU-initiated RDMA writes via a CPU proxy coroutine.
+ * The GPU kernel pushes requests to a queue, and the CPU proxy executes
+ * the actual RDMA operations. This enables GPU-driven communication patterns.
+ *
+ * ## Architecture Overview
+ * ```
+ * ┌────────────────────────────────────────────────────────────────┐
+ * │                         GPU                                    │
+ * │  ┌─────────────────────────────────────────────────────────┐   │
+ * │  │  Kernel                                                 │   │
+ * │  │  ┌─────────┐    ┌─────────┐    ┌─────────┐              │   │
+ * │  │  │ Write   │───►│ Push to │───►│ Fence + │              │   │
+ * │  │  │ Data    │    │ Queue   │    │ Quiet   │              │   │
+ * │  │  └─────────┘    └────┬────┘    └─────────┘              │   │
+ * │  └──────────────────────┼──────────────────────────────────┘   │
+ * └─────────────────────────┼──────────────────────────────────────┘
+ *                           │ MPSC Queue (GPU→CPU)
+ *                           ▼
+ * ┌────────────────────────────────────────────────────────────────┐
+ * │                         CPU                                    │
+ * │  ┌─────────────────────────────────────────────────────────┐   │
+ * │  │  Proxy Coroutine                                        │   │
+ * │  │  ┌─────────┐    ┌─────────┐    ┌─────────┐              │   │
+ * │  │  │ Pop     │───►│ RDMA    │───►│Complete │              │   │
+ * │  │  │ Request │    │ Write   │    │ Counter │              │   │
+ * │  │  └─────────┘    └────┬────┘    └─────────┘              │   │
+ * │  └──────────────────────┼──────────────────────────────────┘   │
+ * └─────────────────────────┼──────────────────────────────────────┘
+ *                           │ EFA RDMA
+ *                           ▼
+ *                      ┌─────────┐
+ *                      │ Remote  │
+ *                      │ Memory  │
+ *                      └─────────┘
+ * ```
+ *
+ * ## Synchronization
+ * - `posted`: Atomic counter incremented by GPU after each push
+ * - `completed`: Atomic counter incremented by CPU after each RDMA
+ * - `Fence()`: __threadfence_system() for GPU-CPU visibility
+ * - `Quiet()`: Spin-wait until completed >= posted
  */
 #pragma once
 
 #include <io/awaiter.h>
+#include <io/progress.h>
 #include <io/runner.h>
-#include <rdma/fabric/selector.h>
+#include <rdma/request.h>
 
-#include <bench/mpi/fabric.cuh>
-
-/** @brief Write data and push RDMA request to queue (with Quiet per write) */
-template <typename Ctx>
+/**
+ * @brief Write data and push RDMA request to queue (with Quiet per write)
+ *
+ * Blocking mode: waits for completion after each write.
+ */
+template <typename Ctx, typename Request>
 __device__ __forceinline__ void DeviceWrite(Ctx ctx, int target, size_t len, int* __restrict__ data, uint64_t imm) {
   for (size_t idx = threadIdx.x; idx < len; idx += blockDim.x) data[idx] = target + static_cast<int>(idx);
   __threadfence_system();
   if (threadIdx.x == 0) {
-    DeviceRequest req{
-        .type = static_cast<uint64_t>(DeviceRequestType::kPut),
+    Request req{
+        .type = static_cast<uint64_t>(rdma::DeviceRequestType::kPut),
         .rank = static_cast<uint64_t>(target),
         .size = len * sizeof(int),
         .addr = reinterpret_cast<uint64_t>(data),
@@ -25,20 +70,20 @@ __device__ __forceinline__ void DeviceWrite(Ctx ctx, int target, size_t len, int
     };
     while (!ctx.queue->Push(req)) __threadfence_system();
     atomicAdd(reinterpret_cast<unsigned long long*>(ctx.posted), 1ULL);
-    Fence();
-    Quiet(ctx.posted, ctx.completed);
+    rdma::Fence();
+    rdma::Quiet(ctx.posted, ctx.completed);
   }
   __syncthreads();
 }
 
 /** @brief NBI (non-blocking interface) write - push without waiting, busy-wait on queue full */
-template <typename Ctx>
+template <typename Ctx, typename Request>
 __device__ __forceinline__ void DeviceWriteNBI(Ctx ctx, int target, size_t len, int* __restrict__ data, uint64_t imm) {
   for (size_t idx = threadIdx.x; idx < len; idx += blockDim.x) data[idx] = target + static_cast<int>(idx);
   __threadfence_system();
   if (threadIdx.x == 0) {
-    DeviceRequest req{
-        .type = static_cast<uint64_t>(DeviceRequestType::kPut),
+    Request req{
+        .type = static_cast<uint64_t>(rdma::DeviceRequestType::kPut),
         .rank = static_cast<uint64_t>(target),
         .size = len * sizeof(int),
         .addr = reinterpret_cast<uint64_t>(data),
@@ -46,7 +91,7 @@ __device__ __forceinline__ void DeviceWriteNBI(Ctx ctx, int target, size_t len, 
     };
     while (!ctx.queue->Push(req)) __threadfence_system();
     atomicAdd(reinterpret_cast<unsigned long long*>(ctx.posted), 1ULL);
-    Fence();
+    rdma::Fence();
   }
   __syncthreads();
 }
@@ -84,9 +129,9 @@ __device__ __forceinline__ bool DeviceVerify(int expected, size_t len, const int
  *    |   (Quiet)    |                 |
  *    v              v                 v
  */
-template <typename Ctx>
+template <typename Ctx, typename Request>
 __global__ void ProxyWriteKernel(Ctx ctx, int target, size_t len, int* __restrict__ data, uint64_t imm, int iters) {
-  for (int i = 0; i < iters; ++i) DeviceWrite(ctx, target, len, data, imm);
+  for (int i = 0; i < iters; ++i) DeviceWrite<Ctx, Request>(ctx, target, len, data, imm);
 }
 
 /**
@@ -104,10 +149,10 @@ __global__ void ProxyWriteKernel(Ctx ctx, int target, size_t len, int* __restric
  *
  * NBI eliminates per-operation wait bubbles by overlapping push and RDMA.
  */
-template <typename Ctx>
+template <typename Ctx, typename Request>
 __global__ void ProxyWriteNBIKernel(Ctx ctx, int target, size_t len, int* __restrict__ data, uint64_t imm, int iters) {
-  for (int i = 0; i < iters; ++i) DeviceWriteNBI(ctx, target, len, data, imm);
-  if (threadIdx.x == 0) Quiet(ctx.posted, ctx.completed);
+  for (int i = 0; i < iters; ++i) DeviceWriteNBI<Ctx, Request>(ctx, target, len, data, imm);
+  if (threadIdx.x == 0) rdma::Quiet(ctx.posted, ctx.completed);
   __syncthreads();
 }
 
@@ -118,16 +163,16 @@ __global__ void ProxyWaitKernel(Ctx ctx, int rank, size_t len, int* __restrict__
 }
 
 /** @brief Kernel launcher tags */
-template <typename Ctx>
+template <typename Ctx, typename Request>
 struct KernelBlocking {
   static void Launch(cudaLaunchConfig_t& cfg, Ctx ctx, int target, size_t len, int* data, uint64_t imm, int iters) {
-    LAUNCH_KERNEL(&cfg, ProxyWriteKernel<Ctx>, ctx, target, len, data, imm, iters);
+    LAUNCH_KERNEL(&cfg, (ProxyWriteKernel<Ctx, Request>), ctx, target, len, data, imm, iters);
   }
 };
-template <typename Ctx>
+template <typename Ctx, typename Request>
 struct KernelNBI {
   static void Launch(cudaLaunchConfig_t& cfg, Ctx ctx, int target, size_t len, int* data, uint64_t imm, int iters) {
-    LAUNCH_KERNEL(&cfg, ProxyWriteNBIKernel<Ctx>, ctx, target, len, data, imm, iters);
+    LAUNCH_KERNEL(&cfg, (ProxyWriteNBIKernel<Ctx, Request>), ctx, target, len, data, imm, iters);
   }
 };
 
@@ -135,7 +180,7 @@ struct KernelNBI {
  * @brief Proxy write: GPU kernel pushes requests, CPU proxy executes RDMA
  * @tparam Launcher KernelBlocking (Quiet per write) or KernelNBI (Quiet at end)
  */
-template <typename Peer, bool MultiChannel, template <typename> class Launcher = KernelBlocking>
+template <typename Peer, typename Selector, bool MultiChannel, template <typename, typename> class Launcher = KernelBlocking>
 struct ProxyWrite {
   int iters, target;
 
@@ -153,17 +198,18 @@ struct ProxyWrite {
 
     auto ctx = write[target]->GetContext();
     using CtxType = decltype(ctx);
+    using Request = rdma::DeviceRequest;
     auto* data = reinterpret_cast<int*>(write[target]->Data());
     size_t size = write[target]->Size(), len = size / sizeof(int);
 
     cudaLaunchConfig_t cfg{.gridDim = {1, 1, 1}, .blockDim = {256, 1, 1}, .stream = peer.stream};
-    Launcher<CtxType>::Launch(cfg, ctx, target, len, data, 1ULL, iters);
+    Launcher<CtxType, Request>::Launch(cfg, ctx, target, len, data, 1ULL, iters);
 
     Progress progress(iters, MultiChannel ? peer.GetTotalBandwidth() : peer.GetBandwidth(0));
-    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<Selector>(efa);
     ::Run([&]() -> Coro<> {
       for (int done = 0; done < iters;) {
-        DeviceRequest req;
+        Request req;
         if (ctx.queue->Pop(req)) {
           co_await Write(write[target], target, req.imm);
           write[target]->Complete();
@@ -171,7 +217,7 @@ struct ProxyWrite {
         }
         co_await YieldAwaiter{};
       }
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<Selector>(efa);
     }());
     CUDA_CHECK(cudaStreamSynchronize(peer.stream));
   }
@@ -180,7 +226,7 @@ struct ProxyWrite {
 /**
  * @brief Proxy read: wait for RDMA completions and signal GPU
  */
-template <typename Peer, bool MultiChannel>
+template <typename Peer, typename Selector, bool MultiChannel>
 struct ProxyRead {
   int iters;
 
@@ -207,13 +253,13 @@ struct ProxyRead {
     cudaLaunchConfig_t cfg{.gridDim = {1, 1, 1}, .blockDim = {256, 1, 1}, .stream = peer.stream};
     LAUNCH_KERNEL(&cfg, ProxyWaitKernel<CtxType>, ctx, peer.mpi.GetWorldRank(), len, data, iters, result);
 
-    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Join<Selector>(efa);
     ::Run([&]() -> Coro<> {
       for (int i = 0; i < iters; ++i) {
         co_await Wait(read[0], 1);
         read[0]->Complete();
       }
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+      for (auto& efa : peer.efas) IO::Get().Quit<Selector>(efa);
     }());
 
     CUDA_CHECK(cudaStreamSynchronize(peer.stream));

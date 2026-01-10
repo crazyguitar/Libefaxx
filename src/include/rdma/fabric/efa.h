@@ -1,28 +1,28 @@
 /**
- * @file efa.h
- * @brief EFA (Elastic Fabric Adapter) fabric initialization and management
+ * @file fabric/efa.h
+ * @brief Fabric (libfabric) EFA device management and Backend traits
  */
 #pragma once
 
 #include <hwloc.h>
 #include <io/common.h>
-#include <io/event.h>
+#include <rdma/efa.h>
 #include <rdma/fabric.h>
+#include <rdma/fabric/context.h>
 #include <rdma/fi_cm.h>
 #include <rdma/fi_domain.h>
 #include <rdma/fi_endpoint.h>
+#include <rdma/fi_rma.h>
 #include <spdlog/spdlog.h>
 
-/** @brief Maximum buffer size for endpoint addresses */
-static constexpr size_t kMaxAddrSize = 64;
-/** @brief Actual size of EFA endpoint addresses */
-static constexpr size_t kAddrSize = 32;
+namespace fi {
 
-/**
- * @brief Check libfabric call result and throw on error
- * @param exp Libfabric expression to evaluate
- * @throws std::runtime_error if expression returns non-zero
- */
+// Forward declarations
+class EFA;
+class FabricSelector;
+
+// Context types defined in rdma/fabric/context.h
+
 #define FI_CHECK(exp)                                                            \
   do {                                                                           \
     auto rc = exp;                                                               \
@@ -33,12 +33,6 @@ static constexpr size_t kAddrSize = 32;
     }                                                                            \
   } while (0)
 
-/**
- * @brief Check libfabric call result matches expected value
- * @param exp Libfabric expression to evaluate
- * @param expect Expected return value
- * @throws std::runtime_error if expression result != expect
- */
 #define FI_EXPECT(exp, expect)                                                   \
   do {                                                                           \
     auto rc = (exp);                                                             \
@@ -50,17 +44,53 @@ static constexpr size_t kAddrSize = 32;
   } while (0)
 
 /**
- * @brief Singleton for EFA provider information discovery
- *
- * Queries libfabric for available EFA providers with required capabilities
- * (FI_MSG, FI_RMA, FI_HMEM). Thread-safe singleton pattern.
+ * @brief Fabric Backend traits for unified Channel/Buffer/Memory
+ */
+struct Backend {
+  using efa_type = EFA;
+  using mr_type = struct fid_mr*;
+  using cq_type = struct fid_cq*;
+  using cq_entry_type = struct fi_cq_data_entry;
+  using rma_iov_type = struct fi_rma_iov;
+  using context_type = Context;
+  using imm_context_type = ImmContext;
+  using selector_type = FabricSelector;
+  using key_type = uint64_t;
+  using remote_addr_type = fi_addr_t;
+
+  static constexpr remote_addr_type kInvalidAddr = FI_ADDR_UNSPEC;
+  static constexpr bool kNeedsRmaForSend = false;
+
+  // MR operations
+  static uint64_t GetKey(mr_type mr) { return mr->key; }
+  static void* GetDesc(mr_type mr) { return mr->mem_desc; }
+  static void CloseMR(mr_type mr) { fi_close((fid_t)mr); }
+
+  // RMA IOV
+  static rma_iov_type MakeRmaIov(uint64_t addr, size_t size, mr_type mr) { return {addr, size, mr->key}; }
+
+  // Connection
+  static remote_addr_type Connect(EFA* efa, const char* addr);
+  static void Disconnect(EFA* efa, remote_addr_type& remote);
+
+  // Post operations
+  static ssize_t
+  PostWrite(EFA* efa, void* data, size_t len, mr_type mr, uint64_t addr, key_type key, uint64_t imm, remote_addr_type remote, Context* ctx);
+  static ssize_t
+  PostSend(EFA* efa, void* data, size_t len, mr_type mr, uint64_t addr, key_type key, uint64_t imm, remote_addr_type remote, Context* ctx);
+  static ssize_t PostRecv(EFA* efa, void* data, size_t len, mr_type mr, Context* ctx);
+
+  // Completion length
+  static ssize_t GetWriteLen(const Context& ctx, size_t req_size) { return ctx.entry.len; }
+  static ssize_t GetSendLen(const Context& ctx, size_t req_size) { return ctx.entry.len; }
+  static ssize_t GetRecvLen(const Context& ctx) { return ctx.entry.len; }
+};
+
+/**
+ * @brief Singleton for Fabric EFA provider discovery
  */
 class EFAInfo : private NoCopy {
  public:
-  /**
-   * @brief Get singleton fi_info for EFA providers
-   * @return Linked list of fi_info structures for available EFA devices
-   */
   static const struct fi_info* Get() {
     static EFAInfo instance;
     return instance.info_;
@@ -68,26 +98,13 @@ class EFAInfo : private NoCopy {
 
  private:
   EFAInfo() : info_{New()} {}
-  EFAInfo(EFAInfo&&) = delete;
-  EFAInfo& operator=(EFAInfo&&) = delete;
-
   ~EFAInfo() {
-    if (info_) {
-      fi_freeinfo(info_);
-      info_ = nullptr;
-    }
+    if (info_) fi_freeinfo(info_);
   }
 
- private:
   static struct fi_info* New() {
-    int rc = 0;
-    struct fi_info* hints = nullptr;
-    struct fi_info* info = nullptr;
-    hints = fi_allocinfo();
-    if (!hints) {
-      SPDLOG_ERROR("fi_allocinfo fail.");
-      goto end;
-    }
+    struct fi_info* hints = fi_allocinfo();
+    if (!hints) return nullptr;
 
     hints->caps = FI_MSG | FI_RMA | FI_HMEM | FI_LOCAL_COMM | FI_REMOTE_COMM;
     hints->ep_attr->type = FI_EP_RDM;
@@ -95,65 +112,32 @@ class EFAInfo : private NoCopy {
     hints->domain_attr->mr_mode = FI_MR_LOCAL | FI_MR_HMEM | FI_MR_VIRT_ADDR | FI_MR_ALLOCATED | FI_MR_PROV_KEY;
     hints->domain_attr->threading = FI_THREAD_SAFE;
 
-    rc = fi_getinfo(FI_VERSION(1, 20), NULL, NULL, 0, hints, &info);
+    struct fi_info* info = nullptr;
+    int rc = fi_getinfo(FI_VERSION(1, 20), NULL, NULL, 0, hints, &info);
+    fi_freeinfo(hints);
     if (rc != 0) {
       SPDLOG_ERROR("fi_getinfo fail. error({}): {}", rc, fi_strerror(-rc));
-      goto error;
-    } else {
-      goto end;
-    }
-
-  error:
-    if (info) {
-      fi_freeinfo(info);
-      info = nullptr;
-    }
-
-  end:
-    if (hints) {
-      fi_freeinfo(hints);
-      hints = nullptr;
+      return nullptr;
     }
     return info;
   }
 
- private:
-  /**
-   * @brief Stream output operator for EFA information
-   * @param os Output stream
-   * @param efa EFA instance to output
-   * @return Reference to output stream
-   */
-  friend std::ostream& operator<<(std::ostream& os, const EFAInfo& efa) {
-    for (auto cur = efa.info_; !!cur; cur = cur->next) {
-      os << fmt::format("provider: {}\n", cur->fabric_attr->prov_name);
-      os << fmt::format("  fabric: {}\n", cur->fabric_attr->name);
-      os << fmt::format("  domain: {}\n", cur->domain_attr->name);
-      os << fmt::format("  version: {}.{}\n", FI_MAJOR(cur->fabric_attr->prov_version), FI_MINOR(cur->fabric_attr->prov_version));
-      os << fmt::format("  type: {}\n", fi_tostr(&cur->ep_attr->type, FI_TYPE_EP_TYPE));
-      os << fmt::format("  protocol: {}\n", fi_tostr(&cur->ep_attr->protocol, FI_TYPE_PROTOCOL));
-    }
-    return os;
-  }
-
- private:
   struct fi_info* info_ = nullptr;
 };
 
 /**
- * @brief EFA (Elastic Fabric Adapter) wrapper for libfabric operations
- *
- * Manages libfabric resources including fabric, domain, endpoint, completion queue,
- * and address vector. Supports move semantics for efficient resource transfer.
+ * @brief Fabric EFA device wrapper
  */
 class EFA : private NoCopy {
  public:
   EFA() = delete;
 
-  /**
-   * @brief Move constructor
-   * @param other Source EFA object to move from
-   */
+  EFA(hwloc_obj_t efa) {
+    efa_ = Get(efa);
+    ASSERT(!!efa_);
+    Open(efa_);
+  }
+
   EFA(EFA&& other) noexcept
       : efa_{std::exchange(other.efa_, nullptr)},
         fabric_{std::exchange(other.fabric_, nullptr)},
@@ -165,56 +149,19 @@ class EFA : private NoCopy {
     std::memset(other.addr_, 0, sizeof(other.addr_));
   }
 
-  /**
-   * @brief Move assignment operator
-   * @param other Source EFA object to move from
-   * @return Reference to this object
-   */
-  EFA& operator=(EFA&& other) noexcept {
-    if (this != &other) {
-      efa_ = std::exchange(other.efa_, nullptr);
-      fabric_ = std::exchange(other.fabric_, nullptr);
-      domain_ = std::exchange(other.domain_, nullptr);
-      ep_ = std::exchange(other.ep_, nullptr);
-      cq_ = std::exchange(other.cq_, nullptr);
-      av_ = std::exchange(other.av_, nullptr);
-      std::memcpy(addr_, other.addr_, sizeof(addr_));
-      std::memset(other.addr_, 0, sizeof(other.addr_));
-    }
-    return *this;
-  }
-
-  /**
-   * @brief Construct EFA instance for specific hardware device
-   * @param efa hwloc object representing the EFA device
-   *
-   * Finds matching libfabric provider info by comparing PCI bus addresses
-   * and initializes all libfabric resources (fabric, domain, endpoint, etc.)
-   */
-  EFA(hwloc_obj_t efa) {
-    efa_ = Get(efa);
-    ASSERT(!!efa_);
-    Open(efa_);
-  }
-
-  /**
-   * @brief Destructor - closes all libfabric resources
-   *
-   * Closes resources in reverse order: completion queue, address vector,
-   * endpoint, domain, and fabric. Safe for moved-from objects.
-   */
   ~EFA() noexcept {
-    if (cq_) {
-      fi_close((fid_t)cq_);
-      cq_ = nullptr;
+    // Close in reverse order of creation: ep depends on cq/av, which depend on domain, which depends on fabric
+    if (ep_) {
+      fi_close((fid_t)ep_);
+      ep_ = nullptr;
     }
     if (av_) {
       fi_close((fid_t)av_);
       av_ = nullptr;
     }
-    if (ep_) {
-      fi_close((fid_t)ep_);
-      ep_ = nullptr;
+    if (cq_) {
+      fi_close((fid_t)cq_);
+      cq_ = nullptr;
     }
     if (domain_) {
       fi_close((fid_t)domain_);
@@ -226,78 +173,34 @@ class EFA : private NoCopy {
     }
   }
 
-  /**
-   * @brief Get local endpoint address
-   * @return Local address buffer
-   */
   const char* GetAddr() const noexcept { return addr_; }
+  struct fid_cq* GetCQ() noexcept { return cq_; }
+  struct fid_av* GetAV() noexcept { return av_; }
+  struct fid_domain* GetDomain() noexcept { return domain_; }
+  struct fid_ep* GetEP() noexcept { return ep_; }
+  const struct fi_info* GetInfo() const noexcept { return efa_; }
 
-  /** @brief Get completion queue handle */
-  [[nodiscard]] struct fid_cq* GetCQ() noexcept { return cq_; }
-  /** @brief Get address vector handle */
-  [[nodiscard]] struct fid_av* GetAV() noexcept { return av_; }
-  /** @brief Get domain handle */
-  [[nodiscard]] struct fid_domain* GetDomain() noexcept { return domain_; }
-  /** @brief Get endpoint handle */
-  [[nodiscard]] struct fid_ep* GetEP() noexcept { return ep_; }
-  /** @brief Get libfabric provider info for this EFA */
-  [[nodiscard]] const struct fi_info* GetInfo() const noexcept { return efa_; }
-
-  /**
-   * @brief Convert binary address to hex string
-   * @param addr Binary address buffer
-   * @return Hex string representation
-   */
-  static std::string Addr2Str(const char* addr) {
-    std::string out;
-    for (size_t i = 0; i < kAddrSize; ++i) out += fmt::format("{:02x}", addr[i]);
-    return out;
-  }
-
-  /**
-   * @brief Convert hex string to binary address
-   * @param addr Hex string address
-   * @param bytes Output binary buffer
-   */
-  static void Str2Addr(const std::string& addr, char* bytes) noexcept {
-    for (size_t i = 0; i < kAddrSize; ++i) sscanf(addr.c_str() + 2 * i, "%02hhx", &bytes[i]);
-  }
+  static std::string Addr2Str(const char* addr) { return rdma::Addr2Str(addr); }
 
  private:
-  /**
-   * @brief Find libfabric provider info matching hardware EFA device
-   * @param efa hwloc object representing the EFA device
-   * @return Pointer to matching fi_info, or nullptr if not found
-   *
-   * Matches by comparing PCI domain, bus, device, and function IDs
-   */
   struct fi_info* Get(hwloc_obj_t efa) {
     auto* info = EFAInfo::Get();
     for (auto p = info; !!p; p = p->next) {
-      ASSERT(!!p->nic);
-      ASSERT(p->nic->bus_attr and p->nic->bus_attr->bus_type == FI_BUS_PCI);
+      ASSERT(!!p->nic && p->nic->bus_attr && p->nic->bus_attr->bus_type == FI_BUS_PCI);
       auto fi = p->nic->bus_attr->attr.pci;
       auto hw = efa->attr->pcidev;
-      if (fi.domain_id == hw.domain and fi.bus_id == hw.bus and fi.device_id == hw.dev and fi.function_id == hw.func) {
+      if (fi.domain_id == hw.domain && fi.bus_id == hw.bus && fi.device_id == hw.dev && fi.function_id == hw.func) {
         return const_cast<struct fi_info*>(p);
       }
     }
     return nullptr;
   }
 
-  /**
-   * @brief Initialize libfabric resources for the EFA device
-   * @param info Libfabric provider info for the device
-   *
-   * Opens fabric, domain, completion queue, address vector, and endpoint.
-   * Binds endpoint to CQ and AV, enables endpoint, and retrieves local address.
-   */
   void Open(struct fi_info* info) {
     struct fi_av_attr av_attr{};
     struct fi_cq_attr cq_attr{};
     FI_CHECK(fi_fabric(info->fabric_attr, &fabric_, nullptr));
     FI_CHECK(fi_domain(fabric_, info, &domain_, nullptr));
-
     cq_attr.format = FI_CQ_FORMAT_DATA;
     FI_CHECK(fi_cq_open(domain_, &cq_attr, &cq_, nullptr));
     FI_CHECK(fi_av_open(domain_, &av_attr, &av_, nullptr));
@@ -305,20 +208,8 @@ class EFA : private NoCopy {
     FI_CHECK(fi_ep_bind(ep_, &cq_->fid, FI_SEND | FI_RECV));
     FI_CHECK(fi_ep_bind(ep_, &av_->fid, 0));
     FI_CHECK(fi_enable(ep_));
-
     size_t len = sizeof(addr_);
     FI_CHECK(fi_getname(&ep_->fid, addr_, &len));
-  }
-
- private:
-  friend std::ostream& operator<<(std::ostream& os, const EFA& efa) {
-    os << fmt::format("provider: {}\n", efa.efa_->fabric_attr->prov_name);
-    os << fmt::format("  fabric: {}\n", efa.efa_->fabric_attr->name);
-    os << fmt::format("  domain: {}\n", efa.efa_->domain_attr->name);
-    os << fmt::format("  version: {}.{}\n", FI_MAJOR(efa.efa_->fabric_attr->prov_version), FI_MINOR(efa.efa_->fabric_attr->prov_version));
-    os << fmt::format("  type: {}\n", fi_tostr(&efa.efa_->ep_attr->type, FI_TYPE_EP_TYPE));
-    os << fmt::format("  protocol: {}\n", fi_tostr(&efa.efa_->ep_attr->protocol, FI_TYPE_PROTOCOL));
-    return os;
   }
 
  private:
@@ -328,5 +219,43 @@ class EFA : private NoCopy {
   struct fid_ep* ep_ = nullptr;
   struct fid_cq* cq_ = nullptr;
   struct fid_av* av_ = nullptr;
-  char addr_[kMaxAddrSize] = {0};
+  char addr_[rdma::kMaxAddrSize] = {};
 };
+
+// Backend implementation
+inline Backend::remote_addr_type Backend::Connect(EFA* efa, const char* addr) {
+  fi_addr_t remote = FI_ADDR_UNSPEC;
+  FI_EXPECT(fi_av_insert(efa->GetAV(), addr, 1, &remote, 0, nullptr), 1);
+  return remote;
+}
+
+inline void Backend::Disconnect(EFA* efa, remote_addr_type& remote) {
+  if (remote != FI_ADDR_UNSPEC && efa) {
+    fi_av_remove(efa->GetAV(), &remote, 1, 0);
+    remote = FI_ADDR_UNSPEC;
+  }
+}
+
+inline ssize_t
+Backend::PostWrite(EFA* efa, void* data, size_t len, mr_type mr, uint64_t addr, key_type key, uint64_t imm, remote_addr_type remote, Context* ctx) {
+  struct iovec iov{data, len};
+  struct fi_rma_iov rma_iov{addr, len, key};
+  struct fi_msg_rma msg{&iov, &mr->mem_desc, 1, remote, &rma_iov, 1, ctx, imm};
+  uint64_t flags = imm ? FI_REMOTE_CQ_DATA : 0;
+  return fi_writemsg(efa->GetEP(), &msg, flags);
+}
+
+inline ssize_t
+Backend::PostSend(EFA* efa, void* data, size_t len, mr_type mr, uint64_t addr, key_type key, uint64_t imm, remote_addr_type remote, Context* ctx) {
+  struct iovec iov{data, len};
+  struct fi_msg msg{&iov, &mr->mem_desc, 1, remote, ctx, 0};
+  return fi_sendmsg(efa->GetEP(), &msg, 0);
+}
+
+inline ssize_t Backend::PostRecv(EFA* efa, void* data, size_t len, mr_type mr, Context* ctx) {
+  struct iovec iov{data, len};
+  struct fi_msg msg{&iov, &mr->mem_desc, 1, FI_ADDR_UNSPEC, ctx, 0};
+  return fi_recvmsg(efa->GetEP(), &msg, 0);
+}
+
+}  // namespace fi

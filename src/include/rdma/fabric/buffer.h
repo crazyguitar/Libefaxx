@@ -7,6 +7,7 @@
 #include <cuda.h>
 #include <io/common.h>
 #include <io/coro.h>
+#include <rdma/buffer.h>
 #include <rdma/fabric/channel.h>
 #include <rdma/fabric/selector.h>
 #include <spdlog/spdlog.h>
@@ -18,6 +19,10 @@
 #include <unordered_map>
 #include <vector>
 
+namespace fi {
+
+using ImmdataAwaiter = rdma::ImmdataAwaiter<FabricSelector, ImmContext>;
+
 /**
  * @brief Base buffer class for RDMA channel operations
  *
@@ -28,37 +33,6 @@ class Buffer : private NoCopy {
   static constexpr size_t kAlign = 128;
 
  public:
-  /**
-   * @brief Awaiter for immediate data operations
-   *
-   * Coroutine awaiter that suspends until immediate data is received.
-   */
-  struct ImmdataAwaiter {
-    uint64_t imm_data{0};   ///< Expected immediate data value
-    ImmContext context{0};  ///< Context for the operation
-
-    constexpr bool await_ready() const noexcept { return false; }
-
-    void await_resume() noexcept {
-      // Cleanup: remove context from selector
-      IO::Get().Quit<FabricSelector>(context);
-    }
-
-    template <typename Promise>
-    bool await_suspend(std::coroutine_handle<Promise> coroutine) {
-      if (imm_data == 0) [[unlikely]]
-        return false;
-      context.handle = &coroutine.promise();
-      context.imm_data = imm_data;
-      // Join returns true if completion already arrived (don't suspend)
-      if (IO::Get().Join<FabricSelector>(context)) {
-        return false;  // Don't suspend, completion already arrived
-      }
-      coroutine.promise().SetState(Handle::kSuspend);
-      return true;
-    }
-  };
-
   Buffer() = delete;
   Buffer(Buffer&& other) = delete;
   Buffer& operator=(Buffer&& other) = delete;
@@ -792,3 +766,5 @@ class DevicePinBuffer : public Buffer {
   int device_ = -1;              ///< CUDA device ID
   void* mapped_data_ = nullptr;  ///< Host pinned pointer registered for RDMA
 };
+
+}  // namespace fi
