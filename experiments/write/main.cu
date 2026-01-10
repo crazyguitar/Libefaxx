@@ -181,28 +181,27 @@ int main(int argc, char* argv[]) {
     int nranks = MPI::Get().GetWorldSize();
 
     // Run Fabric tests
-    std::vector<std::array<BenchResult, 3>> fabric_results;
+    std::vector<std::array<BenchResult, 4>> fabric_results;
     for (auto size : sizes) {
-      fabric_results.push_back(RunTests<FabricDMA, FabricHost, FabricRoundRobin>(size, opts));
+      fabric_results.push_back(RunTests<FabricDMA, FabricHost, FabricMultiDMA, FabricRoundRobin>(size, opts));
     }
 
     // Run IB tests
-    // std::vector<std::array<BenchResult, 3>> ib_results;
-    // for (auto size : sizes) {
-    //  ib_results.push_back(RunTests<IBDMA, IBHost, IBRoundRobin>(size, opts));
-    //}
+    std::vector<std::array<BenchResult, 4>> ib_results;
+    for (auto size : sizes) {
+      ib_results.push_back(RunTests<IBDMA, IBHost, IBMultiDMA, IBRoundRobin>(size, opts));
+    }
 
     if (rank == 0) {
       FabricBench::Print(
           "EFA Write Benchmark (Fabric)", nranks, opts.warmup, opts.repeat, "rank0 -> rank_k (k=1..N-1), averaged across all pairs",
           {"FabricDMA", "FabricHost", "FabricRoundRobin"}, fabric_results
       );
-      // IBBench::Print(
-      //     "EFA Write Benchmark (IB)", nranks, opts.warmup, opts.repeat, "rank0 -> rank_k (k=1..N-1), averaged across all pairs",
-      //     {"IBDMA", "IBHost", "IBRoundRobin"}, ib_results
-      //);
+      IBBench::Print(
+          "EFA Write Benchmark (IB)", nranks, opts.warmup, opts.repeat, "rank0 -> rank_k (k=1..N-1), averaged across all pairs",
+          {"IBDMA", "IBHost", "IBMultiDMA", "IBRoundRobin"}, ib_results
+      );
     }
-    MPI_Barrier(MPI_COMM_WORLD);
     return 0;
   } catch (const std::exception& e) {
     SPDLOG_ERROR("Fatal error: {}", e.what());
