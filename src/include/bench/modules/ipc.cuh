@@ -1,12 +1,82 @@
 /**
  * @file ipc.cuh
  * @brief GPU-Initiated IPC module for intra-node communication
+ *
+ * This module implements direct GPU-to-GPU memory transfers within a node
+ * using CUDA IPC (Inter-Process Communication). No CPU involvement or
+ * network stack - pure GPU memory copy via PCIe/NVLink.
+ *
+ * ## IPC Architecture
+ * ```
+ * ┌────────────────────────────────────────────────────────────────┐
+ * │                         Node                                   │
+ * │                                                                │
+ * │  ┌─────────────┐                      ┌─────────────┐          │
+ * │  │   GPU 0     │                      │   GPU 1     │          │
+ * │  │  (Rank 0)   │                      │  (Rank 1)   │          │
+ * │  │             │                      │             │          │
+ * │  │ ┌─────────┐ │   PCIe / NVLink      │ ┌─────────┐ │          │
+ * │  │ │ Local   │ │ ════════════════════►│ │ Remote  │ │          │
+ * │  │ │ Buffer  │ │   Direct GPU Write   │ │ Buffer  │ │          │
+ * │  │ └─────────┘ │                      │ └─────────┘ │          │
+ * │  │             │                      │             │          │
+ * │  └─────────────┘                      └─────────────┘          │
+ * │                                                                │
+ * └────────────────────────────────────────────────────────────────┘
+ * ```
+ *
+ * ## IPC Handle Exchange
+ * ```
+ * Rank 0                              Rank 1
+ * ──────                              ──────
+ *    │                                   │
+ *    │  cudaIpcGetMemHandle()            │  cudaIpcGetMemHandle()
+ *    │         │                         │         │
+ *    │         ▼                         │         ▼
+ *    │  ┌──────────┐                     │  ┌──────────┐
+ *    │  │ Handle 0 │◄────MPI_Allgather───┼──│ Handle 1 │
+ *    │  └──────────┘                     │  └──────────┘
+ *    │         │                         │         │
+ *    │         ▼                         │         ▼
+ *    │  cudaIpcOpenMemHandle(Handle 1)   │  cudaIpcOpenMemHandle(Handle 0)
+ *    │         │                         │         │
+ *    │         ▼                         │         ▼
+ *    │  ipc_ptrs[1] = remote_ptr         │  ipc_ptrs[0] = remote_ptr
+ *    │                                   │
+ * ```
+ *
+ * ## Write Flow
+ * ```
+ * GPU 0 Kernel                        GPU 1 Memory
+ * ────────────                        ────────────
+ *    │                                     │
+ *    │  remote = ipc_ptrs[target]          │
+ *    │         │                           │
+ *    │         ▼                           │
+ *    │  for idx in range:                  │
+ *    │    remote[idx] = data ─────────────►│ [Direct write]
+ *    │         │                           │
+ *    │         ▼                           │
+ *    │  __threadfence_system()             │
+ *    │  [Ensure visibility]                │
+ *    │                                     │
+ * ```
+ *
+ * ## Bandwidth
+ * - NVLink: ~300-600 GB/s (bidirectional)
+ * - PCIe 4.0 x16: ~32 GB/s per direction
+ * - PCIe 5.0 x16: ~64 GB/s per direction
  */
 #pragma once
 
-#include <bench/mpi/fabric.cuh>
+#include <device/common.cuh>
 
-/** @brief IPC verify kernel - check data on GPU */
+/**
+ * @brief IPC verify kernel - check data on GPU
+ *
+ * Verifies that received data matches expected pattern.
+ * Sets result to 0 if any mismatch found.
+ */
 __global__ void IPCVerifyKernel(const int* __restrict__ data, int expected, size_t len, int* __restrict__ result) {
   size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
   size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;

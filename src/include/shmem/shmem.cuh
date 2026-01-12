@@ -9,14 +9,14 @@
 
 #include <bootstrap/mpi/fabric.h>
 #include <rdma/fabric/memory.h>
-#include <rdma/fabric/request.h>
+#include <rdma/request.h>
 
 #include <unordered_map>
 
 namespace shmem::detail {
 
-inline std::unique_ptr<Peer> g_peer;
-inline std::unordered_map<void*, std::unique_ptr<SymmetricDMAMemory>> g_allocs;
+inline std::unique_ptr<fi::Peer> g_peer;
+inline std::unordered_map<void*, std::unique_ptr<fi::SymmetricDMAMemory>> g_allocs;
 
 }  // namespace shmem::detail
 
@@ -24,7 +24,7 @@ inline std::unordered_map<void*, std::unique_ptr<SymmetricDMAMemory>> g_allocs;
  * @brief Initialize SHMEM with MPI-based bootstrap
  */
 inline void shmem_init() {
-  shmem::detail::g_peer = std::make_unique<Peer>();
+  shmem::detail::g_peer = std::make_unique<fi::Peer>();
   shmem::detail::g_peer->Exchange();
   shmem::detail::g_peer->Connect();
 }
@@ -62,7 +62,7 @@ inline void shmem_finalize() {
   // Create symmetric memory
   int target = (rank + 1) % world;
   int source = (rank - 1 + world) % world;
-  auto mem = std::make_unique<SymmetricDMAMemory>(peer.channels[target], size, world, peer.device);
+  auto mem = std::make_unique<fi::SymmetricDMAMemory>(peer.channels[target], size, world, peer.device);
 
   // Exchange IPC handles among local ranks
   peer.Handshake(mem);
@@ -101,20 +101,20 @@ inline void shmem_barrier_all() noexcept { MPI_Barrier(MPI_COMM_WORLD); }
  * @brief Get symmetric memory object for a pointer
  * @return Reference to SymmetricDMAMemory
  */
-[[nodiscard]] inline SymmetricDMAMemory& shmem_mem(void* ptr) noexcept { return *shmem::detail::g_allocs.at(ptr); }
+[[nodiscard]] inline fi::SymmetricDMAMemory& shmem_mem(void* ptr) noexcept { return *shmem::detail::g_allocs.at(ptr); }
 
 /**
  * @brief Get peer object
- * @return Reference to Peer
+ * @return Reference to fi::Peer
  */
-[[nodiscard]] inline Peer& shmem_peer() noexcept { return *shmem::detail::g_peer; }
+[[nodiscard]] inline fi::Peer& shmem_peer() noexcept { return *shmem::detail::g_peer; }
 
 #ifdef __CUDACC__
 
 /**
  * @brief Device fence - ensures memory visibility across system
  */
-__device__ __forceinline__ void shmem_fence() { Fence(); }
+__device__ __forceinline__ void shmem_fence() { fi::Fence(); }
 
 /**
  * @brief Device quiet - wait for all outstanding operations to complete
@@ -122,7 +122,7 @@ __device__ __forceinline__ void shmem_fence() { Fence(); }
  */
 template <typename Ctx>
 __device__ __forceinline__ void shmem_quiet(Ctx ctx) {
-  Quiet(ctx.posted, ctx.completed);
+  fi::Quiet(ctx.posted, ctx.completed);
 }
 
 /**
@@ -142,8 +142,8 @@ __device__ __forceinline__ void shmem_p_nbi(const Ctx ctx, T* __restrict__ dest,
     // Inter-node: RDMA via queue
     *dest = value;
     __threadfence_system();
-    DeviceRequest req{
-        .type = static_cast<uint64_t>(DeviceRequestType::kPut),
+    fi::DeviceRequest req{
+        .type = static_cast<uint64_t>(fi::DeviceRequestType::kPut),
         .rank = static_cast<uint64_t>(pe),
         .size = sizeof(T),
         .addr = reinterpret_cast<uint64_t>(dest),

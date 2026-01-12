@@ -7,9 +7,13 @@
  */
 #include <bench/arguments.h>
 #include <rdma/fabric/memory.h>
+#include <rdma/fabric/selector.h>
+#include <rdma/ib/memory.h>
+#include <rdma/ib/selector.h>
 
 #include <bench/modules/sendrecv.cuh>
 #include <bench/mpi/fabric.cuh>
+#include <bench/mpi/ib.cuh>
 
 /** @brief Pair-aware verification for GPU buffers */
 struct PairVerifyGPU {
@@ -45,27 +49,27 @@ struct PairVerifyCPU {
 
 /**
  * @brief Test configuration for a specific buffer type
- * @tparam BufType Buffer type (DeviceDMABuffer or HostBuffer)
- * @tparam PairVerify Pair-aware verification functor
  */
-template <const char* Name, typename BufType, typename PairVerify = PairVerifyGPU>
+template <const char* Name, typename Peer, typename Selector, typename BufType, typename PairVerify = PairVerifyGPU>
 struct Test {
-  static BenchResult Run(size_t size, const Options& opts, double link_bw) {
-    FabricBench peer;
+  static BenchResult Run(size_t size, const Options& opts) {
+    Peer peer;
     peer.Exchange();
     peer.Connect();
     int rank = peer.mpi.GetWorldRank();
     int world = peer.mpi.GetWorldSize();
+    double link_bw = peer.GetBandwidth(0) / 1e9;
 
-    auto send = peer.Alloc<BufType>(size, rank);
-    auto recv = peer.Alloc<BufType>(size, -1);
+    auto send = peer.template Alloc<BufType>(size, rank);
+    auto recv = peer.template Alloc<BufType>(size, -1);
+    peer.Handshake(send, recv);
 
     double total_bw = 0;
     double total_time = 0;
     size_t progress_bw = static_cast<size_t>(link_bw * 1e9);
     for (int t = 1; t < world; ++t) {
-      peer.Warmup(send, recv, PairBench<FabricBench>{t}, PairVerify{t}, opts.warmup);
-      auto r = peer.Bench(Name, send, recv, PairBench<FabricBench>{t}, PairVerify{t}, opts.repeat, 0, progress_bw);
+      peer.Warmup(send, recv, PairBench<Peer, Selector>{t}, PairVerify{t}, opts.warmup);
+      auto r = peer.Bench(Name, send, recv, PairBench<Peer, Selector>{t}, PairVerify{t}, opts.repeat, 0, progress_bw);
       total_bw += r.bw_gbps;
       total_time += r.time_us;
     }
@@ -81,22 +85,25 @@ struct Test {
  * @tparam Tests Test types to run
  * @param size Buffer size in bytes
  * @param opts Benchmark options
- * @param link_bw Theoretical link bandwidth in Gbps
  * @return Array of BenchResult for each test type
  */
 template <typename... Tests>
-std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& opts, double link_bw) {
+std::array<BenchResult, sizeof...(Tests)> RunTests(size_t size, const Options& opts) {
   std::array<BenchResult, sizeof...(Tests)> results;
   size_t i = 0;
-  ((results[i++] = Tests::Run(size, opts, link_bw), MPI_Barrier(MPI_COMM_WORLD)), ...);
+  ((results[i++] = Tests::Run(size, opts), MPI_Barrier(MPI_COMM_WORLD)), ...);
   return results;
 }
 
-inline constexpr char kSingleDevice[] = "SingleDevice";
-inline constexpr char kSingleHost[] = "SingleHost";
+inline constexpr char kFabricDMA[] = "FabricDMA";
+inline constexpr char kFabricHost[] = "FabricHost";
+inline constexpr char kIBDMA[] = "IBDMA";
+inline constexpr char kIBHost[] = "IBHost";
 
-using SingleDevice = Test<kSingleDevice, SymmetricDMAMemory, PairVerifyGPU>;  ///< GPU DMA buffer test
-using SingleHost = Test<kSingleHost, SymmetricHostMemory, PairVerifyCPU>;     ///< Host pinned buffer test
+using FabricDMA = Test<kFabricDMA, FabricBench, fi::FabricSelector, fi::SymmetricDMAMemory, PairVerifyGPU>;
+using FabricHost = Test<kFabricHost, FabricBench, fi::FabricSelector, fi::SymmetricHostMemory, PairVerifyCPU>;
+using IBDMA = Test<kIBDMA, IBBench, ib::IBSelector, ib::SymmetricDMAMemory, PairVerifyGPU>;
+using IBHost = Test<kIBHost, IBBench, ib::IBSelector, ib::SymmetricHostMemory, PairVerifyCPU>;
 
 int main(int argc, char* argv[]) {
   try {
@@ -105,21 +112,15 @@ int main(int argc, char* argv[]) {
     int rank = MPI::Get().GetWorldRank();
     int nranks = MPI::Get().GetWorldSize();
 
-    // link_attr->speed is in bits/sec
-    FabricBench peer;
-    double link_bw = peer.GetBandwidth(0) / 1e9;
-
-    // Run all benchmarks
-    std::vector<std::array<BenchResult, 2>> results;
+    std::vector<std::array<BenchResult, 4>> results;
     for (auto size : sizes) {
-      results.push_back(RunTests<SingleDevice, SingleHost>(size, opts, link_bw));
+      results.push_back(RunTests<FabricDMA, FabricHost, IBDMA, IBHost>(size, opts));
     }
 
-    // Print summary at the end (rank 0 only)
     if (rank == 0) {
       FabricBench::Print(
-          "EFA SendRecv Benchmark", nranks, opts.warmup, opts.repeat, link_bw, "rank0 <-> rank_k (k=1..N-1), averaged across all pairs",
-          {"Device(Gbps)", "Host(Gbps)"}, results
+          "EFA SendRecv Benchmark", nranks, opts.warmup, opts.repeat, "rank0 <-> rank_k (k=1..N-1), averaged across all pairs",
+          {"FabricDMA", "FabricHost", "IBDMA", "IBHost"}, results
       );
     }
     return 0;

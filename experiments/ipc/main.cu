@@ -37,7 +37,7 @@ struct Test {
     int local_size = peer.mpi.GetLocalSize();
 
     // Allocate IPC buffer and exchange handles with local ranks
-    auto bufs = peer.AllocIPC<SymmetricDMAMemory>(size);
+    auto bufs = peer.AllocIPC<fi::SymmetricDMAMemory>(size);
     auto local_world_ranks = peer.Handshake(bufs, std::true_type{});
 
     auto& affinity = GPUloc::Get().GetGPUAffinity()[peer.device];
@@ -98,7 +98,7 @@ int main(int argc, char* argv[]) {
 
   if (rank == 0) {
     FabricBench::Print(
-        "IPC Write Benchmark - Parallelism Impact on NVLink Utilization", local_size, opts.warmup, opts.repeat, 0,
+        "IPC Write Benchmark - Parallelism Impact on NVLink Utilization", local_size, opts.warmup, opts.repeat,
         "Demonstrates how grid/block dimensions affect NVLink bandwidth utilization", {"IPC(1x256)", "IPC(1x1024)", "IPC(16x256)", "IPC(128x256)"},
         results
     );

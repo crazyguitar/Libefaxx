@@ -17,6 +17,9 @@ target_link_libraries(${target} PRIVATE
   CUDA::cudart
   efaxx::efaxx
   spdlog::spdlog
+  PkgConfig::Fabric
+  PkgConfig::IBVerbs
+  PkgConfig::EFAVerbs
   "${MPI_LIBRARIES}"
   "${HWLOC_LIBRARIES}"
   "${NVML_LIBRARIES}"

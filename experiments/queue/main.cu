@@ -13,7 +13,7 @@
 #include <getopt.h>
 #include <io/awaiter.h>
 #include <io/runner.h>
-#include <rdma/fabric/request.h>
+#include <rdma/request.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -167,8 +167,8 @@ __device__ __forceinline__ void DevicePush(BenchContext<T> ctx) {
     typename T::value_type payload{};
     while (!ctx.queue->Push(payload)) __threadfence_system();
     atomicAdd(reinterpret_cast<unsigned long long*>(ctx.posted), 1ULL);
-    Fence();
-    Quiet(ctx.posted, ctx.completed);
+    fi::Fence();
+    fi::Quiet(ctx.posted, ctx.completed);
   }
   __syncthreads();
 }
@@ -181,7 +181,7 @@ __device__ __forceinline__ void DevicePushNBI(BenchContext<T> ctx) {
     typename T::value_type payload{};
     while (!ctx.queue->Push(payload)) __threadfence_system();
     atomicAdd(reinterpret_cast<unsigned long long*>(ctx.posted), 1ULL);
-    Fence();
+    fi::Fence();
   }
   __syncthreads();
 }
@@ -196,7 +196,7 @@ __global__ void PushKernel(BenchContext<T> ctx, int iters) {
 template <typename T>
 __global__ void PushNBIKernel(BenchContext<T> ctx, int iters) {
   for (int i = 0; i < iters; ++i) DevicePushNBI(ctx);
-  if (threadIdx.x == 0) Quiet(ctx.posted, ctx.completed);
+  if (threadIdx.x == 0) fi::Quiet(ctx.posted, ctx.completed);
   __syncthreads();
 }
 

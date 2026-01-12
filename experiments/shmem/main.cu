@@ -29,10 +29,10 @@ void shmem_proxy(void* ptr, int send_count, int recv_count) {
   int rdma_send_count = need_rdma_send ? send_count : 0;
   int rdma_recv_count = need_rdma_recv ? recv_count : 0;
 
-  for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
+  for (auto& efa : peer.efas) IO::Get().Join<fi::FabricSelector>(efa);
   Run([&]() -> Coro<> {
     for (int done = 0; done < rdma_send_count;) {
-      DeviceRequest req;
+      fi::DeviceRequest req;
       if (!ctx.queue->Pop(req)) {
         co_await YieldAwaiter{};
         continue;
@@ -42,7 +42,7 @@ void shmem_proxy(void* ptr, int send_count, int recv_count) {
       ++done;
     }
     for (int i = 0; i < rdma_recv_count; ++i) co_await mem.WaitImmdata(1);
-    for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
+    for (auto& efa : peer.efas) IO::Get().Quit<fi::FabricSelector>(efa);
   }());
 }
 
