@@ -340,3 +340,70 @@ utilization.
 ```
 
 ![ipc](imgs/ipc.png)
+
+## Libfabric vs IBVerbs: EFA API Performance Comparison
+
+AWS EFA supports two programming interfaces: [Libfabric](https://github.com/ofiwg/libfabric)
+(the OpenFabrics Interfaces library) and [IBVerbs](https://github.com/linux-rdma/rdma-core)
+(the InfiniBand Verbs API). Understanding the trade-offs between these APIs is
+essential for developers building high-performance RDMA applications on EFA.
+This section compares latency, throughput, and reliability characteristics of
+both interfaces.
+
+**Performance Comparison:** IBVerbs operates closer to the hardware, bypassing
+Libfabric's abstraction layer. Our benchmarks show IBVerbs achieves marginally
+lower latency than Libfabric—less than **5 µs** difference—which demonstrates
+that Libfabric's extra abstraction layer does not introduce obvious overhead.
+Both APIs saturate EFA bandwidth at large message sizes, confirming that
+Libfabric's abstraction does not impact throughput.
+
+**Reliability and Stability:** Libfabric provides a higher-level abstraction
+that handles many protocol-specific details automatically. When implementing
+two-sided operations (`fi_sendmsg`, `fi_recvmsg`) directly with IBVerbs over
+EFA's SRD (Scalable Reliable Datagram) protocol, we encountered numerous
+protocol-related errors that required careful handling. Libfabric's EFA provider
+has been extensively validated by the AWS EFA team, providing more robust error
+handling and edge case coverage.
+
+**Recommendation:** Given the minimal performance difference (<5 µs latency)
+and significantly improved reliability, **Libfabric is the recommended API** for
+EFA applications. Use IBVerbs only when absolute minimum latency is critical and
+you have deep expertise in SRD protocol semantics.
+
+```
+ API Stack Comparison
+
+   Application                            Application
+        │                                      │
+        ▼                                      ▼
+  ┌───────────┐                          ┌───────────┐
+  │ Libfabric │  ◄── Higher-level API    │  IBVerbs  │  ◄── Lower-level API
+  │  (fi_*)   │      + EFA provider      │  (ibv_*)  │      + Direct hardware
+  └─────┬─────┘                          └─────┬─────┘
+        │                                      │
+        ▼                                      ▼
+  ┌───────────┐                          ┌───────────┐
+  │  IBVerbs  │                          │    EFA    │
+  │  (ibv_*)  │                          │  Driver   │
+  └─────┬─────┘                          └─────┬─────┘
+        │                                      │
+        ▼                                      ▼
+  ┌───────────┐                          ┌───────────┐
+  │    EFA    │                          │    EFA    │
+  │  Driver   │                          │ Hardware  │
+  └─────┬─────┘                          └───────────┘
+        │
+        ▼
+  ┌───────────┐
+  │    EFA    │
+  │ Hardware  │
+  └───────────┘
+
+  Libfabric:                              IBVerbs:
+  - Portable across fabrics               - EFA/IB specific
+  - Validated EFA provider                - Direct hardware access
+  - Better error handling                 - ~5 µs lower latency
+  - Recommended for most use cases        - Requires SRD expertise
+```
+
+![fabric-ib](imgs/fabric.png)
