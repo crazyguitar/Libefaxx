@@ -24,12 +24,12 @@ struct BufferTraits<ib::SymmetricHostMemory> {
  */
 struct IBTraits {
   template <typename T>
-  static std::unique_ptr<T> MakeBuffer(std::vector<std::vector<ib::Channel>>& channels, int /*peer*/, int device, size_t size, int world_size) {
-    // IB uses full 2D channels array for all buffers
+  static std::unique_ptr<T>
+  MakeBuffer(std::vector<ib::EFA>& efas, std::vector<std::vector<ib::Channel>>& channels, int device, size_t size, int world_size) {
     if constexpr (std::is_same_v<T, ib::HostBuffer> || std::is_same_v<T, ib::DeviceDMABuffer>) {
-      return std::make_unique<T>(channels, device, size);
+      return std::make_unique<T>(efas, channels, device, size);
     } else {
-      return std::make_unique<T>(channels, size, world_size, device);
+      return std::make_unique<T>(efas, channels, device, size, world_size);
     }
   }
 };

@@ -27,8 +27,15 @@ class SymmetricMemory : public BufferType, public rdma::SymmetricMemoryBase<Queu
   static constexpr bool IsDeviceBuffer() { return std::is_same_v<BufferType, DeviceDMABuffer> || std::is_same_v<BufferType, DevicePinBuffer>; }
 
  public:
-  SymmetricMemory(std::vector<Channel>& channels, size_t size, int world_size, int device = -1, size_t align = BufferType::kAlign)
-      : BufferType(channels, device, size, align), Base(world_size, IsDeviceBuffer()) {
+  SymmetricMemory(
+      std::vector<EFA>& efas,
+      std::vector<std::vector<Channel>>& channels,
+      int device,
+      size_t size,
+      int world_size,
+      size_t align = BufferType::kAlign
+  )
+      : BufferType(efas, channels, device, size, align), Base(world_size, IsDeviceBuffer()) {
     rma_iovs_.resize(world_size);
   }
 
@@ -58,16 +65,16 @@ class SymmetricMemory : public BufferType, public rdma::SymmetricMemoryBase<Queu
 
   [[nodiscard]] Coro<ssize_t> Write(int rank, uint64_t imm_data, size_t ch) {
     const auto& iov = GetRemoteRmaIov(rank, ch);
-    return BufferType::Write(iov.addr, iov.key, imm_data, ch);
+    return BufferType::Write(iov.addr, iov.key, imm_data, rank, ch);
   }
 
   [[nodiscard]] Coro<ssize_t> Writeall(int rank, uint64_t imm_data, size_t ch) {
     const auto& iov = GetRemoteRmaIov(rank, ch);
-    return BufferType::Writeall(iov.addr, iov.key, imm_data, ch);
+    return BufferType::Writeall(iov.addr, iov.key, imm_data, rank, ch);
   }
 
   [[nodiscard]] Coro<ssize_t> Writeall(int rank, uint64_t imm_data) {
-    const size_t num_channels = this->channels_.size();
+    const size_t num_channels = this->channels_[rank].size();
     const size_t total_size = this->Size();
     const size_t chunk_size = total_size / num_channels;
     const auto& remote_rma = GetRemoteRmaIovs(rank);
@@ -82,7 +89,7 @@ class SymmetricMemory : public BufferType, public rdma::SymmetricMemoryBase<Queu
       auto* mr = this->mrs_[ch];
       auto addr = remote_rma[ch].addr + offset;
       auto key = remote_rma[ch].key;
-      futures.emplace_back(this->channels_[ch].Writeall(data + offset, len, mr, addr, key, Base::EncodeImmdata(imm_data, ch)));
+      futures.emplace_back(this->channels_[rank][ch].Writeall(data + offset, len, mr, addr, key, Base::EncodeImmdata(imm_data, ch)));
     }
 
     ssize_t total_written = 0;
@@ -95,16 +102,21 @@ class SymmetricMemory : public BufferType, public rdma::SymmetricMemoryBase<Queu
   }
 
   [[nodiscard]] Coro<> WaitallImmdata(uint64_t imm_data) {
-    for (size_t ch = 0; ch < this->channels_.size(); ++ch) {
+    // Get num_channels from first non-empty row
+    size_t num_channels = 0;
+    for (auto& row : this->channels_) {
+      if (!row.empty()) {
+        num_channels = row.size();
+        break;
+      }
+    }
+    for (size_t ch = 0; ch < num_channels; ++ch) {
       co_await BufferType::WaitImmdata(Base::EncodeImmdata(imm_data, ch));
     }
   }
 
-  /** @brief Sendall with rank param for API compatibility with IB (rank ignored for fabric) */
-  [[nodiscard]] Coro<ssize_t> Sendall(int /*rank*/, size_t ch) { co_return co_await BufferType::Sendall(ch); }
-
-  /** @brief Recvall with rank param for API compatibility with IB (rank ignored for fabric) */
-  [[nodiscard]] Coro<ssize_t> Recvall(int /*rank*/, size_t ch) { co_return co_await BufferType::Recvall(ch); }
+  [[nodiscard]] Coro<ssize_t> Sendall(int rank, size_t ch) { co_return co_await BufferType::Sendall(rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Recvall(int rank, size_t ch) { co_return co_await BufferType::Recvall(rank, ch); }
 
  private:
   std::vector<std::vector<fi_rma_iov>> rma_iovs_;  // [world_size][num_channels]

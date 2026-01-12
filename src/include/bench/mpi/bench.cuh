@@ -144,7 +144,7 @@ class BenchBase : public PeerBase {
     int value = (init_value == -1) ? rank : init_value;
     for (int i = 0; i < world_size; ++i) {
       if (i == rank) continue;
-      buffers[i] = Traits::template MakeBuffer<T>(this->channels, i, this->device, size, world_size);
+      buffers[i] = Traits::template MakeBuffer<T>(this->efas, this->channels, this->device, size, world_size);
       InitBuffer(buffers[i].get(), num_ints, value, stream);
     }
     return buffers;
@@ -155,7 +155,7 @@ class BenchBase : public PeerBase {
     const auto world_size = this->mpi.GetWorldSize();
     const auto rank = this->mpi.GetWorldRank();
     typename PeerBase::template Buffers<T> buffers(world_size);
-    buffers[rank] = Traits::template MakeBuffer<T>(this->channels, rank, this->device, size, world_size);
+    buffers[rank] = Traits::template MakeBuffer<T>(this->efas, this->channels, this->device, size, world_size);
     const size_t num_ints = size / sizeof(int);
     int value = (init_value == -1) ? rank : init_value;
     InitBuffer(buffers[rank].get(), num_ints, value, stream);

@@ -24,12 +24,12 @@ struct BufferTraits<fi::SymmetricHostMemory> {
  */
 struct FabricTraits {
   template <typename T>
-  static std::unique_ptr<T> MakeBuffer(std::vector<std::vector<fi::Channel>>& channels, int peer, int device, size_t size, int world_size) {
-    // Fabric uses channels[peer] for the specific peer
+  static std::unique_ptr<T>
+  MakeBuffer(std::vector<fi::EFA>& efas, std::vector<std::vector<fi::Channel>>& channels, int device, size_t size, int world_size) {
     if constexpr (std::is_same_v<T, fi::HostBuffer> || std::is_same_v<T, fi::DeviceDMABuffer> || std::is_same_v<T, fi::DevicePinBuffer>) {
-      return std::make_unique<T>(channels[peer], device, size);
+      return std::make_unique<T>(efas, channels, device, size);
     } else {
-      return std::make_unique<T>(channels[peer], size, world_size, device);
+      return std::make_unique<T>(efas, channels, device, size, world_size);
     }
   }
 };

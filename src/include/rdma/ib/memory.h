@@ -26,8 +26,24 @@ class SymmetricMemory : public BufferType, public rdma::SymmetricMemoryBase<Queu
   using Base = rdma::SymmetricMemoryBase<QueueType, SymmetricMemory<BufferType, QueueType>>;
 
  public:
-  SymmetricMemory(std::vector<std::vector<Channel>>& channels, size_t size, int world_size, int device = -1, size_t align = BufferType::kAlign)
-      : BufferType(channels, device, size, align), Base(world_size, std::is_same_v<BufferType, DeviceDMABuffer>) {
+  /**
+   * @brief Construct SymmetricMemory
+   * @param efas EFA endpoints for memory registration
+   * @param channels 2D channel array [world_size][num_channels]
+   * @param device CUDA device ID
+   * @param size Buffer size in bytes
+   * @param world_size Number of ranks
+   * @param align Memory alignment
+   */
+  SymmetricMemory(
+      std::vector<EFA>& efas,
+      std::vector<std::vector<Channel>>& channels,
+      int device,
+      size_t size,
+      int world_size,
+      size_t align = BufferType::kAlign
+  )
+      : BufferType(efas, channels, device, size, align), Base(world_size, std::is_same_v<BufferType, DeviceDMABuffer>) {
     rma_iovs_.resize(world_size);
   }
 

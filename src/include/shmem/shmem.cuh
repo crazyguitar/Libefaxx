@@ -62,7 +62,7 @@ inline void shmem_finalize() {
   // Create symmetric memory
   int target = (rank + 1) % world;
   int source = (rank - 1 + world) % world;
-  auto mem = std::make_unique<fi::SymmetricDMAMemory>(peer.channels[target], size, world, peer.device);
+  auto mem = std::make_unique<fi::SymmetricDMAMemory>(peer.efas, peer.channels, peer.device, size, world);
 
   // Exchange IPC handles among local ranks
   peer.Handshake(mem);
