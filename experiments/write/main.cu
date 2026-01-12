@@ -195,7 +195,7 @@ int main(int argc, char* argv[]) {
     if (rank == 0) {
       FabricBench::Print(
           "EFA Write Benchmark (Fabric)", nranks, opts.warmup, opts.repeat, "rank0 -> rank_k (k=1..N-1), averaged across all pairs",
-          {"FabricDMA", "FabricHost", "FabricRoundRobin"}, fabric_results
+          {"FabricDMA", "FabricHost", "FabricMultiDMA", "FabricRoundRobin"}, fabric_results
       );
       IBBench::Print(
           "EFA Write Benchmark (IB)", nranks, opts.warmup, opts.repeat, "rank0 -> rank_k (k=1..N-1), averaged across all pairs",
