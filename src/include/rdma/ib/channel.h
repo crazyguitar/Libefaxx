@@ -200,7 +200,7 @@ class Channel : private NoCopy {
         auto rc = co_await Awaiter{ptr, remaining, args...};
         if (rc >= 0) [[likely]] {
           n += static_cast<size_t>(rc);
-        } else if (rc == -EAGAIN) {
+        } else if (rc == -EAGAIN || rc == -ENOMEM) {  // ib_writemsg will return ENOMEM when RDMA write fail
           co_await YieldAwaiter{};
         } else {
           co_return rc;
@@ -214,7 +214,7 @@ class Channel : private NoCopy {
       rc = co_await Awaiter{data, len, args...};
       if (rc >= 0) [[likely]] {
         break;
-      } else if (rc == -EAGAIN) {
+      } else if (rc == -EAGAIN || rc == -ENOMEM) {
         co_await YieldAwaiter{};
       } else {
         co_return rc;
