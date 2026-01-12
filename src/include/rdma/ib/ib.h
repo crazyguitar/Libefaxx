@@ -184,9 +184,6 @@ inline int ib_domain_close(ib_domain* domain) {
  *
  * Creates an extended completion queue with standard flags.
  *
- * Reference: libfabric/prov/efa/src/efa_cq.c:943 (wc_flags = IBV_WC_STANDARD_FLAGS)
- * Reference: libfabric/prov/efa/src/efa_cq.h:166-171 (efa_cq_open_ibv_cq_with_ibv_create_cq_ex)
- *
  * @param domain Domain handle
  * @param cq Output CQ handle
  * @return 0 on success, negative on error
@@ -200,7 +197,6 @@ inline int ib_cq_open(ib_domain* domain, ib_cq** cq) {
   cq_attr.comp_mask = 0;
 
   // Use efadv_create_cq to enable unsolicited write recv support
-  // Reference: libfabric/prov/efa/src/efa_cq.c:952-957
   efadv_cq_init_attr efa_cq_attr{};
   efa_cq_attr.comp_mask = 0;
   efa_cq_attr.wc_flags = EFADV_WC_EX_WITH_SGID | EFADV_WC_EX_WITH_IS_UNSOLICITED;
@@ -258,9 +254,6 @@ inline int ib_av_close(ib_av* av) {
  * Creates an EFA SRD queue pair with the specified CQ bound.
  * Enables RDMA WRITE operations for RMA support.
  *
- * Reference: libfabric/prov/efa/src/efa_base_ep.c:223-270 (efa_qp_create)
- * Reference: libfabric/prov/efa/src/efa_base_ep.c:243-244 (IBV_QP_EX_WITH_RDMA_WRITE flags)
- *
  * @param domain Domain handle
  * @param info Device info
  * @param ep Output endpoint handle
@@ -288,7 +281,6 @@ inline int ib_endpoint(ib_domain* domain, ib_info* info, ib_ep** ep, ib_cq* cq) 
   efa_attr.driver_qp_type = EFADV_QP_DRIVER_TYPE_SRD;
   // Enable unsolicited write recv - allows receiving RDMA write with immediate
   // data without posting receive buffers (EFA feature)
-  // Reference: libfabric/prov/efa/src/efa_base_ep.c:246-249
   efa_attr.flags = EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;
 
   auto* qp = efadv_create_qp_ex(domain->ctx, &qp_attr, &efa_attr, sizeof(efa_attr));
@@ -552,9 +544,6 @@ constexpr uint64_t IB_MORE = 1ULL << 1;
  * @brief Post RDMA write message (equivalent to fi_writemsg)
  *
  * Posts an RDMA write operation to the send queue.
- *
- * Reference: libfabric/prov/efa/src/efa_rma.c:177-241 (efa_rma_post_write)
- * Reference: libfabric/prov/efa/src/efa_rma.c:244-255 (efa_rma_writemsg)
  *
  * @param ep Endpoint handle
  * @param msg RMA message descriptor
