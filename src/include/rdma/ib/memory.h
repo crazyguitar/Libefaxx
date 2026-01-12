@@ -6,7 +6,7 @@
 
 #include <bootstrap/mpi/mpi.h>
 #include <rdma/ib/buffer.h>
-#include <rdma/ib/request.h>
+#include <rdma/request.h>
 #include <rdma/symmetric.h>
 
 #include <algorithm>

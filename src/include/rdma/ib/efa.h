@@ -9,6 +9,7 @@
 #include <rdma/efa.h>
 #include <rdma/ib/context.h>
 #include <rdma/ib/ib.h>
+#include <rdma/ib/selector.h>
 
 #include <climits>
 #include <vector>
@@ -17,7 +18,6 @@ namespace ib {
 
 // Forward declarations
 class EFA;
-class IBSelector;
 
 // Use IB-specific context types directly (defined in rdma/ib/context.h)
 // Note: ib::Context and ib::ImmContext are non-templated for nvcc compatibility

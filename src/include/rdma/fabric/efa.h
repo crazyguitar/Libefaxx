@@ -9,6 +9,7 @@
 #include <rdma/efa.h>
 #include <rdma/fabric.h>
 #include <rdma/fabric/context.h>
+#include <rdma/fabric/selector.h>
 #include <rdma/fi_cm.h>
 #include <rdma/fi_domain.h>
 #include <rdma/fi_endpoint.h>
@@ -19,7 +20,6 @@ namespace fi {
 
 // Forward declarations
 class EFA;
-class FabricSelector;
 
 // Context types defined in rdma/fabric/context.h
 

@@ -81,6 +81,7 @@
 #include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
 #include <io/common.h>
+#include <rdma/ib/context.h>
 #include <spdlog/spdlog.h>
 #include <sys/uio.h>
 
@@ -666,6 +667,47 @@ inline int ib_writedata(
   ib_rma_iov rma_iov{remote_addr, len, remote_key};
   ib_msg_rma msg{&iov, &lkey, 1, &rma_iov, 1, ah, qpn, qkey, context, imm_data};
   return ib_writemsg(ep, &msg, IB_REMOTE_CQ_DATA);
+}
+
+/**
+ * @brief Read completion queue entries (equivalent to fi_cq_read)
+ */
+inline ssize_t ib_cq_read(ib_cq* cq, ib_cq_data_entry* entries, size_t max_entries) {
+  ibv_poll_cq_attr attr{};
+  int ret = ibv_start_poll(cq->cq, &attr);
+  if (ret == ENOENT) return 0;
+  if (ret != 0) return -ret;
+
+  auto* cq_ex = cq->cq;
+  size_t count = 0;
+  do {
+    if (cq_ex->status) {
+      SPDLOG_ERROR("CQ error: status={} vendor_err={}", static_cast<int>(cq_ex->status), ibv_wc_read_vendor_err(cq_ex));
+      ibv_end_poll(cq->cq);
+      return -EIO;
+    }
+
+    auto opcode = ibv_wc_read_opcode(cq_ex);
+    auto wr_id = cq_ex->wr_id;
+    auto flags = ibv_wc_read_wc_flags(cq_ex);
+    bool is_recv_rdma_imm = (opcode == IBV_WC_RECV_RDMA_WITH_IMM);
+
+    if (wr_id || is_recv_rdma_imm) {
+      entries[count].op_context = reinterpret_cast<void*>(wr_id);
+      entries[count].flags = flags;
+      entries[count].len = ibv_wc_read_byte_len(cq_ex);
+      entries[count].buf = nullptr;
+      entries[count].data = 0;
+      if (is_recv_rdma_imm || (flags & IBV_WC_WITH_IMM)) {
+        entries[count].data = ntohl(ibv_wc_read_imm_data(cq_ex));
+      }
+      ++count;
+      if (count >= max_entries) break;
+    }
+  } while (ibv_next_poll(cq_ex) == 0);
+
+  ibv_end_poll(cq->cq);
+  return static_cast<ssize_t>(count);
 }
 
 }  // namespace ib

@@ -4,8 +4,10 @@
  */
 #pragma once
 #include <io/event.h>
+#include <io/selector.h>
 
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace rdma {
@@ -84,5 +86,65 @@ void HandleImmdata(CQEntry& entry, std::vector<Event>& ret, ImmContextMap<ImmCtx
     e.pending++;
   }
 }
+
+/**
+ * @brief Generic RDMA selector template for completion queue event multiplexing
+ * @tparam Backend Backend traits (FabricBackend or IBBackend)
+ */
+template <typename Backend>
+class RdmaSelector : public detail::Selector {
+ public:
+  using CQ = typename Backend::CQ;
+  using CQEntry = typename Backend::CQEntry;
+  using Ctx = typename Backend::Context;
+  using ImmCtx = typename Backend::ImmContext;
+  using ImmMap = ImmContextMap<ImmCtx>;
+  using ms = std::chrono::milliseconds;
+
+  [[nodiscard]] std::vector<Event> Select(ms duration = ms{500}) override final {
+    if (Stopped()) return {};
+    std::vector<Event> res;
+    CQEntry entries[kMaxCQEntries];
+    for (auto* cq : cqs_) {
+      auto rc = Backend::CQRead(cq, entries, kMaxCQEntries);
+      if (rc > 0)
+        HandleCompletion(entries, static_cast<size_t>(rc), res);
+      else if (rc < 0)
+        Backend::HandleError(cq, rc);
+    }
+    return res;
+  }
+
+  template <typename E>
+  void Join(E& efa) noexcept {
+    cqs_.emplace(efa.GetCQ());
+  }
+
+  template <typename E>
+  void Quit(E& efa) noexcept {
+    cqs_.erase(efa.GetCQ());
+  }
+
+  bool Join(ImmCtx& ctx) { return JoinImm(imm_, ctx); }
+  void Quit(ImmCtx& ctx) { QuitImm(imm_, ctx); }
+
+  [[nodiscard]] bool Stopped() const noexcept override final { return cqs_.empty(); }
+
+ private:
+  void HandleCompletion(CQEntry* entries, size_t n, std::vector<Event>& ret) {
+    for (size_t i = 0; i < n; ++i) {
+      auto& e = entries[i];
+      if (Backend::IsRemoteWrite(e)) {
+        HandleImmdata(e, ret, imm_);
+      } else if (auto* ctx = reinterpret_cast<Ctx*>(e.op_context)) {
+        ctx->entry = e;
+        ret.emplace_back(Event{-1, e.flags, ctx->handle});
+      }
+    }
+  }
+
+  std::unordered_set<CQ*> cqs_;
+  ImmMap imm_;
+};
 
 }  // namespace rdma

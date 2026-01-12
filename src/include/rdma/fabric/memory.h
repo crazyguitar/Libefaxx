@@ -6,7 +6,7 @@
 
 #include <bootstrap/mpi/mpi.h>
 #include <rdma/fabric/buffer.h>
-#include <rdma/fabric/request.h>
+#include <rdma/request.h>
 #include <rdma/symmetric.h>
 
 #include <algorithm>
