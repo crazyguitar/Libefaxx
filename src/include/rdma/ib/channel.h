@@ -7,7 +7,6 @@
 #include <io/coro.h>
 #include <io/future.h>
 #include <io/io.h>
-#include <rdma/channel.h>
 #include <rdma/ib/context.h>
 #include <rdma/ib/efa.h>
 #include <rdma/ib/ib.h>
@@ -15,7 +14,7 @@
 
 namespace ib {
 
-using rdma::kChunkSize;
+static constexpr size_t kChunkSize = 1 << 20;  // 1MB
 
 /**
  * @brief RDMA channel managing GPU memory registration and remote peer connection
