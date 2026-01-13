@@ -351,14 +351,19 @@ class Channel : private NoCopy {
       coros.emplace_back(Await<all, Awaiter>(ptr, size, args...));
     }
 
+    // Must wait for ALL futures even on error to prevent use-after-free.
+    // Early return would destroy coros while RDMA ops are in-flight, causing
+    // completion handler to resume destroyed coroutines.
     size_t n = 0;
+    ssize_t first_error = 0;
     for (auto& c : coros) {
       auto rc = co_await c;
-      if (rc < 0) [[unlikely]] {
-        throw std::runtime_error(fmt::format("error: {} total: {}", fi_strerror(-rc), n));
-      }
-      n += static_cast<size_t>(rc);
+      if (rc < 0 && first_error == 0) [[unlikely]]
+        first_error = rc;
+      else if (rc >= 0)
+        n += static_cast<size_t>(rc);
     }
+    if (first_error < 0) throw std::runtime_error(fmt::format("error: {} total: {}", fi_strerror(-first_error), n));
     co_return n;
   }
 
@@ -380,13 +385,15 @@ class Channel : private NoCopy {
     }
 
     size_t n = 0;
+    ssize_t first_error = 0;
     for (auto& c : coros) {
       auto rc = co_await c;
-      if (rc < 0) [[unlikely]] {
-        throw std::runtime_error(fmt::format("error: {} total: {}", fi_strerror(-rc), n));
-      }
-      n += static_cast<size_t>(rc);
+      if (rc < 0 && first_error == 0) [[unlikely]]
+        first_error = rc;
+      else if (rc >= 0)
+        n += static_cast<size_t>(rc);
     }
+    if (first_error < 0) throw std::runtime_error(fmt::format("RDMA write error: {}", fi_strerror(-first_error)));
     co_return n;
   }
 

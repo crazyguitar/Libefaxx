@@ -59,13 +59,13 @@ class Buffer : private NoCopy {
 
   /**
    * @brief Send data through specified channel
+   * @param rank Target rank
    * @param buffer Buffer to send
    * @param len Bytes to send
-   * @param rank Target rank
    * @param ch Channel index
    * @return Bytes sent
    */
-  [[nodiscard]] Coro<ssize_t> Send(void* __restrict__ buffer, size_t len, int rank, size_t ch) {
+  [[nodiscard]] Coro<ssize_t> Send(int rank, void* __restrict__ buffer, size_t len, size_t ch) {
     ASSERT(buffer && len > 0 && ch < channels_[rank].size() && ch < mrs_.size());
     auto rc = co_await channels_[rank][ch].Send(buffer, len, mrs_[ch]);
     if (rc < 0) [[unlikely]]
@@ -75,13 +75,13 @@ class Buffer : private NoCopy {
 
   /**
    * @brief Receive data through specified channel
+   * @param rank Source rank
    * @param buffer Buffer to receive into
    * @param len Maximum bytes to receive
-   * @param rank Source rank
    * @param ch Channel index
    * @return Bytes received
    */
-  [[nodiscard]] Coro<ssize_t> Recv(void* __restrict__ buffer, size_t len, int rank, size_t ch) {
+  [[nodiscard]] Coro<ssize_t> Recv(int rank, void* __restrict__ buffer, size_t len, size_t ch) {
     ASSERT(buffer && len > 0 && ch < channels_[rank].size() && ch < mrs_.size());
     auto rc = co_await channels_[rank][ch].Recv(buffer, len, mrs_[ch]);
     if (rc < 0) [[unlikely]]
@@ -91,16 +91,16 @@ class Buffer : private NoCopy {
 
   /**
    * @brief Write data to remote memory
+   * @param rank Target rank
    * @param buffer Buffer to write
    * @param len Bytes to write
    * @param addr Remote memory address
    * @param key Remote memory key
    * @param imm_data Immediate data
-   * @param rank Target rank
    * @param ch Channel index
    * @return Bytes written
    */
-  [[nodiscard]] Coro<ssize_t> Write(void* __restrict__ buffer, size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, int rank, size_t ch) {
+  [[nodiscard]] Coro<ssize_t> Write(int rank, void* __restrict__ buffer, size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
     ASSERT(buffer && len > 0 && ch < channels_[rank].size() && ch < mrs_.size());
     auto rc = co_await channels_[rank][ch].Write(buffer, len, mrs_[ch], addr, key, imm_data);
     if (rc < 0) [[unlikely]]
@@ -110,13 +110,13 @@ class Buffer : private NoCopy {
 
   /**
    * @brief Send all data to remote peer
+   * @param rank Target rank
    * @param buffer Buffer to send
    * @param len Total bytes to send
-   * @param rank Target rank
    * @param ch Channel index
    * @return Total bytes sent
    */
-  [[nodiscard]] Coro<ssize_t> Sendall(void* __restrict__ buffer, size_t len, int rank, size_t ch) {
+  [[nodiscard]] Coro<ssize_t> Sendall(int rank, void* __restrict__ buffer, size_t len, size_t ch) {
     ASSERT(buffer && len > 0 && ch < channels_[rank].size() && ch < mrs_.size());
     auto rc = co_await channels_[rank][ch].Sendall(buffer, len, mrs_[ch]);
     if (rc < 0) [[unlikely]]
@@ -126,13 +126,13 @@ class Buffer : private NoCopy {
 
   /**
    * @brief Receive all data from remote peer
+   * @param rank Source rank
    * @param buffer Buffer to receive into
    * @param len Total bytes to receive
-   * @param rank Source rank
    * @param ch Channel index
    * @return Total bytes received
    */
-  [[nodiscard]] Coro<ssize_t> Recvall(void* __restrict__ buffer, size_t len, int rank, size_t ch) {
+  [[nodiscard]] Coro<ssize_t> Recvall(int rank, void* __restrict__ buffer, size_t len, size_t ch) {
     ASSERT(buffer && len > 0 && ch < channels_[rank].size() && ch < mrs_.size());
     auto rc = co_await channels_[rank][ch].Recvall(buffer, len, mrs_[ch]);
     if (rc < 0) [[unlikely]]
@@ -142,16 +142,16 @@ class Buffer : private NoCopy {
 
   /**
    * @brief Write all data to remote memory
+   * @param rank Target rank
    * @param buffer Buffer to write
    * @param len Bytes to write
    * @param addr Remote memory address
    * @param key Remote memory key
    * @param imm_data Immediate data
-   * @param rank Target rank
    * @param ch Channel index
    * @return Total bytes written
    */
-  [[nodiscard]] Coro<ssize_t> Writeall(void* __restrict__ buffer, size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, int rank, size_t ch) {
+  [[nodiscard]] Coro<ssize_t> Writeall(int rank, void* __restrict__ buffer, size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
     ASSERT(buffer && len > 0 && ch < channels_[rank].size() && ch < mrs_.size());
     auto rc = co_await channels_[rank][ch].Writeall(buffer, len, mrs_[ch], addr, key, imm_data);
     if (rc < 0) [[unlikely]]
@@ -161,34 +161,34 @@ class Buffer : private NoCopy {
 
   /**
    * @brief Send from internal buffer
-   * @param len Bytes to send
    * @param rank Target rank
+   * @param len Bytes to send
    * @param ch Channel index
    * @return Bytes sent
    */
-  [[nodiscard]] Coro<ssize_t> Send(size_t len, int rank, size_t ch) { co_return co_await Send(data_, len, rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Send(int rank, size_t len, size_t ch) { co_return co_await Send(rank, data_, len, ch); }
 
   /**
    * @brief Receive into internal buffer
-   * @param len Maximum bytes to receive
    * @param rank Source rank
+   * @param len Maximum bytes to receive
    * @param ch Channel index
    * @return Bytes received
    */
-  [[nodiscard]] Coro<ssize_t> Recv(size_t len, int rank, size_t ch) { co_return co_await Recv(data_, len, rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Recv(int rank, size_t len, size_t ch) { co_return co_await Recv(rank, data_, len, ch); }
 
   /**
    * @brief Write from internal buffer to remote memory
+   * @param rank Target rank
    * @param len Bytes to write
    * @param addr Remote memory address
    * @param key Remote memory key
    * @param imm_data Immediate data
-   * @param rank Target rank
    * @param ch Channel index
    * @return Bytes written
    */
-  [[nodiscard]] Coro<ssize_t> Write(size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, int rank, size_t ch) {
-    co_return co_await Write(data_, len, addr, key, imm_data, rank, ch);
+  [[nodiscard]] Coro<ssize_t> Write(int rank, size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
+    co_return co_await Write(rank, data_, len, addr, key, imm_data, ch);
   }
 
   /**
@@ -197,7 +197,7 @@ class Buffer : private NoCopy {
    * @param ch Channel index
    * @return Bytes sent
    */
-  [[nodiscard]] Coro<ssize_t> Send(int rank, size_t ch) { co_return co_await Send(data_, size_, rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Send(int rank, size_t ch) { co_return co_await Send(rank, data_, size_, ch); }
 
   /**
    * @brief Receive into entire internal buffer
@@ -205,51 +205,51 @@ class Buffer : private NoCopy {
    * @param ch Channel index
    * @return Bytes received
    */
-  [[nodiscard]] Coro<ssize_t> Recv(int rank, size_t ch) { co_return co_await Recv(data_, size_, rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Recv(int rank, size_t ch) { co_return co_await Recv(rank, data_, size_, ch); }
 
   /**
    * @brief Write entire internal buffer to remote memory
+   * @param rank Target rank
    * @param addr Remote memory address
    * @param key Remote memory key
    * @param imm_data Immediate data
-   * @param rank Target rank
    * @param ch Channel index
    * @return Bytes written
    */
-  [[nodiscard]] Coro<ssize_t> Write(uint64_t addr, uint64_t key, uint64_t imm_data, int rank, size_t ch) {
-    co_return co_await Write(data_, size_, addr, key, imm_data, rank, ch);
+  [[nodiscard]] Coro<ssize_t> Write(int rank, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
+    co_return co_await Write(rank, data_, size_, addr, key, imm_data, ch);
   }
 
   /**
    * @brief Send all from internal buffer
-   * @param len Bytes to send
    * @param rank Target rank
+   * @param len Bytes to send
    * @param ch Channel index
    * @return Total bytes sent
    */
-  [[nodiscard]] Coro<ssize_t> Sendall(size_t len, int rank, size_t ch) { co_return co_await Sendall(data_, len, rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Sendall(int rank, size_t len, size_t ch) { co_return co_await Sendall(rank, data_, len, ch); }
 
   /**
    * @brief Receive all into internal buffer
-   * @param len Bytes to receive
    * @param rank Source rank
+   * @param len Bytes to receive
    * @param ch Channel index
    * @return Total bytes received
    */
-  [[nodiscard]] Coro<ssize_t> Recvall(size_t len, int rank, size_t ch) { co_return co_await Recvall(data_, len, rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Recvall(int rank, size_t len, size_t ch) { co_return co_await Recvall(rank, data_, len, ch); }
 
   /**
    * @brief Write all from internal buffer to remote memory
+   * @param rank Target rank
    * @param len Bytes to write
    * @param addr Remote memory address
    * @param key Remote memory key
    * @param imm_data Immediate data
-   * @param rank Target rank
    * @param ch Channel index
    * @return Total bytes written
    */
-  [[nodiscard]] Coro<ssize_t> Writeall(size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, int rank, size_t ch) {
-    co_return co_await Writeall(data_, len, addr, key, imm_data, rank, ch);
+  [[nodiscard]] Coro<ssize_t> Writeall(int rank, size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
+    co_return co_await Writeall(rank, data_, len, addr, key, imm_data, ch);
   }
 
   /**
@@ -258,7 +258,7 @@ class Buffer : private NoCopy {
    * @param ch Channel index
    * @return Total bytes sent
    */
-  [[nodiscard]] Coro<ssize_t> Sendall(int rank, size_t ch) { co_return co_await Sendall(data_, size_, rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Sendall(int rank, size_t ch) { co_return co_await Sendall(rank, data_, size_, ch); }
 
   /**
    * @brief Receive all into entire internal buffer
@@ -266,19 +266,19 @@ class Buffer : private NoCopy {
    * @param ch Channel index
    * @return Total bytes received
    */
-  [[nodiscard]] Coro<ssize_t> Recvall(int rank, size_t ch) { co_return co_await Recvall(data_, size_, rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Recvall(int rank, size_t ch) { co_return co_await Recvall(rank, data_, size_, ch); }
 
   /**
    * @brief Write all of entire internal buffer to remote memory
+   * @param rank Target rank
    * @param addr Remote memory address
    * @param key Remote memory key
    * @param imm_data Immediate data
-   * @param rank Target rank
    * @param ch Channel index
    * @return Total bytes written
    */
-  [[nodiscard]] Coro<ssize_t> Writeall(uint64_t addr, uint64_t key, uint64_t imm_data, int rank, size_t ch) {
-    co_return co_await Writeall(data_, size_, addr, key, imm_data, rank, ch);
+  [[nodiscard]] Coro<ssize_t> Writeall(int rank, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
+    co_return co_await Writeall(rank, data_, size_, addr, key, imm_data, ch);
   }
 
   /**
@@ -388,12 +388,20 @@ class DeviceDMABuffer : public Buffer {
   DeviceDMABuffer(std::vector<EFA>& efas, std::vector<std::vector<Channel>>& channels, int device, size_t size, size_t align = kAlign)
       : Buffer(efas, channels, size), device_{device} {
     ASSERT(align > 0 && (align & (align - 1)) == 0);
+    struct cudaPointerAttributes attrs = {};
     const size_t page_size = sysconf(_SC_PAGESIZE);
     const size_t effective_align = std::max(align, page_size);
     const size_t alloc_size = ((size + page_size - 1) / page_size) * page_size;
+    ASSERT(alloc_size >= size);
     CUDA_CHECK(cudaMalloc(&raw_, alloc_size + effective_align - 1));
+    CUDA_CHECK(cudaPointerGetAttributes(&attrs, raw_));
+    ASSERT(attrs.type == cudaMemoryTypeDevice);
     data_ = Align(raw_, effective_align);
+    const size_t offset = (uintptr_t)data_ - (uintptr_t)raw_;
+    const size_t remaining = alloc_size + effective_align - 1 - offset;
+    ASSERT(remaining >= alloc_size);
     const size_t dmabuf_size = ((size + page_size - 1) / page_size) * page_size;
+    // cuMemGetHandleForAddressRange requires both dptr and size to be aligned to host page size
     CU_CHECK(cuMemGetHandleForAddressRange(&dmabuf_fd_, (CUdeviceptr)data_, dmabuf_size, CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0));
     ASSERT(dmabuf_fd_ != -1);
     try {
@@ -482,34 +490,34 @@ class DevicePinBuffer : public Buffer {
 
   /**
    * @brief Send data through specified channel
-   * @param len Bytes to send
    * @param rank Target rank
+   * @param len Bytes to send
    * @param ch Channel index
    * @return Bytes sent
    */
-  [[nodiscard]] Coro<ssize_t> Send(size_t len, int rank, size_t ch) { co_return co_await Buffer::Send(mapped_data_, len, rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Send(int rank, size_t len, size_t ch) { co_return co_await Buffer::Send(rank, mapped_data_, len, ch); }
 
   /**
    * @brief Receive data through specified channel
-   * @param len Maximum bytes to receive
    * @param rank Source rank
+   * @param len Maximum bytes to receive
    * @param ch Channel index
    * @return Bytes received
    */
-  [[nodiscard]] Coro<ssize_t> Recv(size_t len, int rank, size_t ch) { co_return co_await Buffer::Recv(mapped_data_, len, rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Recv(int rank, size_t len, size_t ch) { co_return co_await Buffer::Recv(rank, mapped_data_, len, ch); }
 
   /**
    * @brief Write data to remote memory
+   * @param rank Target rank
    * @param len Bytes to write
    * @param addr Remote memory address
    * @param key Remote memory key
    * @param imm_data Immediate data
-   * @param rank Target rank
    * @param ch Channel index
    * @return Bytes written
    */
-  [[nodiscard]] Coro<ssize_t> Write(size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, int rank, size_t ch) {
-    co_return co_await Buffer::Write(mapped_data_, len, addr, key, imm_data, rank, ch);
+  [[nodiscard]] Coro<ssize_t> Write(int rank, size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
+    co_return co_await Buffer::Write(rank, mapped_data_, len, addr, key, imm_data, ch);
   }
 
   /**
@@ -518,7 +526,7 @@ class DevicePinBuffer : public Buffer {
    * @param ch Channel index
    * @return Bytes sent
    */
-  [[nodiscard]] Coro<ssize_t> Send(int rank, size_t ch) { co_return co_await Buffer::Send(mapped_data_, size_, rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Send(int rank, size_t ch) { co_return co_await Buffer::Send(rank, mapped_data_, size_, ch); }
 
   /**
    * @brief Receive into entire buffer
@@ -526,65 +534,65 @@ class DevicePinBuffer : public Buffer {
    * @param ch Channel index
    * @return Bytes received
    */
-  [[nodiscard]] Coro<ssize_t> Recv(int rank, size_t ch) { co_return co_await Buffer::Recv(mapped_data_, size_, rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Recv(int rank, size_t ch) { co_return co_await Buffer::Recv(rank, mapped_data_, size_, ch); }
 
   /**
    * @brief Write entire buffer to remote memory
+   * @param rank Target rank
    * @param addr Remote memory address
    * @param key Remote memory key
    * @param imm_data Immediate data
-   * @param rank Target rank
    * @param ch Channel index
    * @return Bytes written
    */
-  [[nodiscard]] Coro<ssize_t> Write(uint64_t addr, uint64_t key, uint64_t imm_data, int rank, size_t ch) {
-    co_return co_await Buffer::Write(mapped_data_, size_, addr, key, imm_data, rank, ch);
+  [[nodiscard]] Coro<ssize_t> Write(int rank, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
+    co_return co_await Buffer::Write(rank, mapped_data_, size_, addr, key, imm_data, ch);
   }
 
   /**
    * @brief Send all data
-   * @param len Bytes to send
    * @param rank Target rank
+   * @param len Bytes to send
    * @param ch Channel index
    * @return Total bytes sent
    */
-  [[nodiscard]] Coro<ssize_t> Sendall(size_t len, int rank, size_t ch) { co_return co_await Buffer::Sendall(mapped_data_, len, rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Sendall(int rank, size_t len, size_t ch) { co_return co_await Buffer::Sendall(rank, mapped_data_, len, ch); }
 
   /**
    * @brief Receive all data
-   * @param len Bytes to receive
    * @param rank Source rank
+   * @param len Bytes to receive
    * @param ch Channel index
    * @return Total bytes received
    */
-  [[nodiscard]] Coro<ssize_t> Recvall(size_t len, int rank, size_t ch) { co_return co_await Buffer::Recvall(mapped_data_, len, rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Recvall(int rank, size_t len, size_t ch) { co_return co_await Buffer::Recvall(rank, mapped_data_, len, ch); }
 
   /**
    * @brief Write all data to remote memory
+   * @param rank Target rank
    * @param len Bytes to write
    * @param addr Remote memory address
    * @param key Remote memory key
    * @param imm_data Immediate data
-   * @param rank Target rank
    * @param ch Channel index
    * @return Total bytes written
    */
-  [[nodiscard]] Coro<ssize_t> Writeall(void* __restrict__, size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, int rank, size_t ch) {
-    co_return co_await Buffer::Writeall(mapped_data_, len, addr, key, imm_data, rank, ch);
+  [[nodiscard]] Coro<ssize_t> Writeall(int rank, void* __restrict__, size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
+    co_return co_await Buffer::Writeall(rank, mapped_data_, len, addr, key, imm_data, ch);
   }
 
   /**
    * @brief Write all data to remote memory
+   * @param rank Target rank
    * @param len Bytes to write
    * @param addr Remote memory address
    * @param key Remote memory key
    * @param imm_data Immediate data
-   * @param rank Target rank
    * @param ch Channel index
    * @return Total bytes written
    */
-  [[nodiscard]] Coro<ssize_t> Writeall(size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, int rank, size_t ch) {
-    co_return co_await Buffer::Writeall(mapped_data_, len, addr, key, imm_data, rank, ch);
+  [[nodiscard]] Coro<ssize_t> Writeall(int rank, size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
+    co_return co_await Buffer::Writeall(rank, mapped_data_, len, addr, key, imm_data, ch);
   }
 
   /**
@@ -593,7 +601,7 @@ class DevicePinBuffer : public Buffer {
    * @param ch Channel index
    * @return Total bytes sent
    */
-  [[nodiscard]] Coro<ssize_t> Sendall(int rank, size_t ch) { co_return co_await Buffer::Sendall(mapped_data_, size_, rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Sendall(int rank, size_t ch) { co_return co_await Buffer::Sendall(rank, mapped_data_, size_, ch); }
 
   /**
    * @brief Receive all into entire buffer
@@ -601,19 +609,19 @@ class DevicePinBuffer : public Buffer {
    * @param ch Channel index
    * @return Total bytes received
    */
-  [[nodiscard]] Coro<ssize_t> Recvall(int rank, size_t ch) { co_return co_await Buffer::Recvall(mapped_data_, size_, rank, ch); }
+  [[nodiscard]] Coro<ssize_t> Recvall(int rank, size_t ch) { co_return co_await Buffer::Recvall(rank, mapped_data_, size_, ch); }
 
   /**
    * @brief Write all of entire buffer to remote memory
+   * @param rank Target rank
    * @param addr Remote memory address
    * @param key Remote memory key
    * @param imm_data Immediate data
-   * @param rank Target rank
    * @param ch Channel index
    * @return Total bytes written
    */
-  [[nodiscard]] Coro<ssize_t> Writeall(uint64_t addr, uint64_t key, uint64_t imm_data, int rank, size_t ch) {
-    co_return co_await Buffer::Writeall(mapped_data_, size_, addr, key, imm_data, rank, ch);
+  [[nodiscard]] Coro<ssize_t> Writeall(int rank, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
+    co_return co_await Buffer::Writeall(rank, mapped_data_, size_, addr, key, imm_data, ch);
   }
 
  protected:

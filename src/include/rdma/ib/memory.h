@@ -148,13 +148,17 @@ class SymmetricMemory : public BufferType, public rdma::SymmetricMemoryBase<Queu
       futures.emplace_back(this->channels_[rank][ch].Writeall(data + offset, len, mr, addr, key, Base::EncodeImmdata(imm_data, ch)));
     }
 
+    // Must wait for ALL futures even on error to prevent use-after-free.
     ssize_t total_written = 0;
+    ssize_t first_error = 0;
     for (auto& fut : futures) {
       ssize_t written = co_await fut;
-      if (written < 0) co_return written;
-      total_written += written;
+      if (written < 0 && first_error == 0)
+        first_error = written;
+      else if (written >= 0)
+        total_written += written;
     }
-    co_return total_written;
+    co_return first_error < 0 ? first_error : total_written;
   }
 
   /**

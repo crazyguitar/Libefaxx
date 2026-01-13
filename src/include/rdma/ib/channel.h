@@ -160,14 +160,17 @@ class Channel : private NoCopy {
       coros.emplace_back(Await<true, SendAwaiter>(ptr, size, ib_mr_lkey(mr), chunk_addr, key, chunk_imm, ah_, qpn_, qkey_, efa_->GetEP()));
     }
 
+    // Must wait for ALL futures even on error to prevent use-after-free.
     size_t n = 0;
+    ssize_t first_error = 0;
     for (auto& c : coros) {
       auto rc = co_await c;
-      if (rc < 0) [[unlikely]] {
-        throw std::runtime_error(fmt::format("ib_sendmsg error: {} total: {}", strerror(-rc), n));
-      }
-      n += static_cast<size_t>(rc);
+      if (rc < 0 && first_error == 0) [[unlikely]]
+        first_error = rc;
+      else if (rc >= 0)
+        n += static_cast<size_t>(rc);
     }
+    if (first_error < 0) throw std::runtime_error(fmt::format("ib_sendmsg error: {}", strerror(-first_error)));
     co_return n;
   }
 
@@ -237,14 +240,17 @@ class Channel : private NoCopy {
       coros.emplace_back(Await<all, WriteAwaiter>(ptr, size, ib_mr_lkey(mr), chunk_addr, key, chunk_imm, ah_, qpn_, qkey_, efa_->GetEP()));
     }
 
+    // Must wait for ALL futures even on error to prevent use-after-free.
     size_t n = 0;
+    ssize_t first_error = 0;
     for (auto& c : coros) {
       auto rc = co_await c;
-      if (rc < 0) [[unlikely]] {
-        throw std::runtime_error(fmt::format("ib_writemsg error: {} total: {}", strerror(-rc), n));
-      }
-      n += static_cast<size_t>(rc);
+      if (rc < 0 && first_error == 0) [[unlikely]]
+        first_error = rc;
+      else if (rc >= 0)
+        n += static_cast<size_t>(rc);
     }
+    if (first_error < 0) throw std::runtime_error(fmt::format("ib_writemsg error: {}", strerror(-first_error)));
     co_return n;
   }
 

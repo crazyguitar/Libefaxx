@@ -65,12 +65,12 @@ class SymmetricMemory : public BufferType, public rdma::SymmetricMemoryBase<Queu
 
   [[nodiscard]] Coro<ssize_t> Write(int rank, uint64_t imm_data, size_t ch) {
     const auto& iov = GetRemoteRmaIov(rank, ch);
-    return BufferType::Write(iov.addr, iov.key, imm_data, rank, ch);
+    return BufferType::Write(rank, iov.addr, iov.key, imm_data, ch);
   }
 
   [[nodiscard]] Coro<ssize_t> Writeall(int rank, uint64_t imm_data, size_t ch) {
     const auto& iov = GetRemoteRmaIov(rank, ch);
-    return BufferType::Writeall(iov.addr, iov.key, imm_data, rank, ch);
+    return BufferType::Writeall(rank, iov.addr, iov.key, imm_data, ch);
   }
 
   [[nodiscard]] Coro<ssize_t> Writeall(int rank, uint64_t imm_data) {
@@ -92,13 +92,17 @@ class SymmetricMemory : public BufferType, public rdma::SymmetricMemoryBase<Queu
       futures.emplace_back(this->channels_[rank][ch].Writeall(data + offset, len, mr, addr, key, Base::EncodeImmdata(imm_data, ch)));
     }
 
+    // Must wait for ALL futures even on error to prevent use-after-free.
     ssize_t total_written = 0;
+    ssize_t first_error = 0;
     for (auto& fut : futures) {
       ssize_t written = co_await fut;
-      if (written < 0) co_return written;
-      total_written += written;
+      if (written < 0 && first_error == 0)
+        first_error = written;
+      else if (written >= 0)
+        total_written += written;
     }
-    co_return total_written;
+    co_return first_error < 0 ? first_error : total_written;
   }
 
   [[nodiscard]] Coro<> WaitallImmdata(uint64_t imm_data) {
