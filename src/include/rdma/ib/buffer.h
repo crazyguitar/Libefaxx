@@ -135,6 +135,11 @@ class Buffer : private NoCopy {
     co_return co_await Sendall(rank, data_, size_, addr, key, imm_data, ch);
   }
 
+  /** @brief Send all using RMA IOV */
+  [[nodiscard]] Coro<ssize_t> Sendall(int rank, const ib_rma_iov& iov, uint64_t imm_data, size_t ch) {
+    co_return co_await Sendall(rank, data_, size_, iov.addr, iov.key, imm_data, ch);
+  }
+
   /**
    * @brief Receive by waiting for RDMA WRITE with immediate completion
    * @param rank Source rank
