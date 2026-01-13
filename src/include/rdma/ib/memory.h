@@ -30,7 +30,7 @@ struct MemoryBackend {
 
   template <typename BufferType, typename Mem>
   static Coro<ssize_t> Recvall(Mem& mem, int rank, size_t ch) {
-    co_return co_await static_cast<BufferType&>(mem).Recvall(rank, 1, ch);
+    co_return co_await static_cast<BufferType&>(mem).Recvall(rank, mem.Size(), 1, ch);
   }
 };
 

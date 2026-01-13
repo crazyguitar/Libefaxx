@@ -1,320 +1,50 @@
 /**
  * @file buffer.h
- * @brief Buffer management for RDMA operations
+ * @brief Buffer management for RDMA operations using libfabric
  */
 #pragma once
 
 #include <cuda.h>
-#include <io/common.h>
-#include <io/coro.h>
 #include <rdma/buffer.h>
 #include <rdma/fabric/channel.h>
 #include <rdma/fabric/selector.h>
 #include <spdlog/spdlog.h>
 #include <unistd.h>
 
-#include <array>
 #include <device/common.cuh>
-#include <limits>
-#include <unordered_map>
 #include <vector>
 
 namespace fi {
 
-using ImmdataAwaiter = rdma::ImmdataAwaiter<FabricSelector, ImmContext>;
+/**
+ * @brief Backend traits for libfabric buffer
+ */
+struct BufferBackend {
+  using EFA = fi::EFA;
+  using Channel = fi::Channel;
+  using MR = fid_mr;
+  using RmaIov = fi_rma_iov;
+  using KeyType = uint64_t;
+  using ImmdataAwaiter = rdma::ImmdataAwaiter<FabricSelector, ImmContext>;
+
+  static constexpr bool kSupportsSendRecv = true;
+  static constexpr const char* kSendOp = "fi_sendmsg";
+  static constexpr const char* kRecvOp = "fi_recvmsg";
+  static constexpr const char* kWriteOp = "fi_writemsg";
+
+  static RmaIov MakeRmaIov(void* data, size_t size, MR* mr) noexcept { return {reinterpret_cast<uint64_t>(data), size, mr->key}; }
+
+  static std::string FormatError(ssize_t rc) { return fi_strerror(-rc); }
+};
 
 /**
- * @brief Base buffer class for RDMA channel operations
- *
- * Abstract base class managing memory registration and RDMA operations.
- * References 2D channel structure: channels[world_size][num_channels]
+ * @brief Buffer class for RDMA channel operations using libfabric
  */
-class Buffer : private NoCopy {
-  static constexpr size_t kAlign = 128;
-
- public:
-  Buffer() = delete;
-  Buffer(Buffer&& other) = delete;
-  Buffer& operator=(Buffer&& other) = delete;
-  virtual ~Buffer() = default;
-
-  /**
-   * @brief Get pointer to buffer data
-   * @return Pointer to aligned memory
-   */
-  [[nodiscard]] void* Data() noexcept { return data_; }
-
-  /**
-   * @brief Get pointer to RDMA-registered data (for use with MRs)
-   * @return Pointer to memory registered with libfabric
-   * @note Override in subclasses where RDMA registration differs from Data()
-   */
-  [[nodiscard]] virtual void* RdmaData() noexcept { return data_; }
-
-  /**
-   * @brief Get buffer size
-   * @return Size in bytes
-   */
-  [[nodiscard]] size_t Size() const noexcept { return size_; }
-
-  /**
-   * @brief Send data through specified channel
-   * @param rank Target rank
-   * @param buffer Buffer to send
-   * @param len Bytes to send
-   * @param ch Channel index
-   * @return Bytes sent
-   */
-  [[nodiscard]] Coro<ssize_t> Send(int rank, void* __restrict__ buffer, size_t len, size_t ch) {
-    ASSERT(buffer && len > 0 && ch < channels_[rank].size() && ch < mrs_.size());
-    auto rc = co_await channels_[rank][ch].Send(buffer, len, mrs_[ch]);
-    if (rc < 0) [[unlikely]]
-      throw std::runtime_error(fmt::format("fi_sendmsg fail. error({}): {}", rc, fi_strerror(-rc)));
-    co_return rc;
-  }
-
-  /**
-   * @brief Receive data through specified channel
-   * @param rank Source rank
-   * @param buffer Buffer to receive into
-   * @param len Maximum bytes to receive
-   * @param ch Channel index
-   * @return Bytes received
-   */
-  [[nodiscard]] Coro<ssize_t> Recv(int rank, void* __restrict__ buffer, size_t len, size_t ch) {
-    ASSERT(buffer && len > 0 && ch < channels_[rank].size() && ch < mrs_.size());
-    auto rc = co_await channels_[rank][ch].Recv(buffer, len, mrs_[ch]);
-    if (rc < 0) [[unlikely]]
-      throw std::runtime_error(fmt::format("fi_recvmsg fail. error({}): {}", rc, fi_strerror(-rc)));
-    co_return rc;
-  }
-
-  /**
-   * @brief Write data to remote memory
-   * @param rank Target rank
-   * @param buffer Buffer to write
-   * @param len Bytes to write
-   * @param addr Remote memory address
-   * @param key Remote memory key
-   * @param imm_data Immediate data
-   * @param ch Channel index
-   * @return Bytes written
-   */
-  [[nodiscard]] Coro<ssize_t> Write(int rank, void* __restrict__ buffer, size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
-    ASSERT(buffer && len > 0 && ch < channels_[rank].size() && ch < mrs_.size());
-    auto rc = co_await channels_[rank][ch].Write(buffer, len, mrs_[ch], addr, key, imm_data);
-    if (rc < 0) [[unlikely]]
-      throw std::runtime_error(fmt::format("fi_writemsg fail. error({}): {}", rc, fi_strerror(-rc)));
-    co_return rc;
-  }
-
-  /**
-   * @brief Send all data to remote peer
-   * @param rank Target rank
-   * @param buffer Buffer to send
-   * @param len Total bytes to send
-   * @param ch Channel index
-   * @return Total bytes sent
-   */
-  [[nodiscard]] Coro<ssize_t> Sendall(int rank, void* __restrict__ buffer, size_t len, size_t ch) {
-    ASSERT(buffer && len > 0 && ch < channels_[rank].size() && ch < mrs_.size());
-    auto rc = co_await channels_[rank][ch].Sendall(buffer, len, mrs_[ch]);
-    if (rc < 0) [[unlikely]]
-      throw std::runtime_error(fmt::format("fi_sendmsg fail. error({}): {}", rc, fi_strerror(-rc)));
-    co_return rc;
-  }
-
-  /**
-   * @brief Receive all data from remote peer
-   * @param rank Source rank
-   * @param buffer Buffer to receive into
-   * @param len Total bytes to receive
-   * @param ch Channel index
-   * @return Total bytes received
-   */
-  [[nodiscard]] Coro<ssize_t> Recvall(int rank, void* __restrict__ buffer, size_t len, size_t ch) {
-    ASSERT(buffer && len > 0 && ch < channels_[rank].size() && ch < mrs_.size());
-    auto rc = co_await channels_[rank][ch].Recvall(buffer, len, mrs_[ch]);
-    if (rc < 0) [[unlikely]]
-      throw std::runtime_error(fmt::format("fi_recvmsg fail. error({}): {}", rc, fi_strerror(-rc)));
-    co_return rc;
-  }
-
-  /**
-   * @brief Write all data to remote memory
-   * @param rank Target rank
-   * @param buffer Buffer to write
-   * @param len Bytes to write
-   * @param addr Remote memory address
-   * @param key Remote memory key
-   * @param imm_data Immediate data
-   * @param ch Channel index
-   * @return Total bytes written
-   */
-  [[nodiscard]] Coro<ssize_t> Writeall(int rank, void* __restrict__ buffer, size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
-    ASSERT(buffer && len > 0 && ch < channels_[rank].size() && ch < mrs_.size());
-    auto rc = co_await channels_[rank][ch].Writeall(buffer, len, mrs_[ch], addr, key, imm_data);
-    if (rc < 0) [[unlikely]]
-      throw std::runtime_error(fmt::format("fi_writemsg fail. error({}): {}", rc, fi_strerror(-rc)));
-    co_return rc;
-  }
-
-  /**
-   * @brief Send from internal buffer
-   * @param rank Target rank
-   * @param len Bytes to send
-   * @param ch Channel index
-   * @return Bytes sent
-   */
-  [[nodiscard]] Coro<ssize_t> Send(int rank, size_t len, size_t ch) { co_return co_await Send(rank, data_, len, ch); }
-
-  /**
-   * @brief Receive into internal buffer
-   * @param rank Source rank
-   * @param len Maximum bytes to receive
-   * @param ch Channel index
-   * @return Bytes received
-   */
-  [[nodiscard]] Coro<ssize_t> Recv(int rank, size_t len, size_t ch) { co_return co_await Recv(rank, data_, len, ch); }
-
-  /**
-   * @brief Write from internal buffer to remote memory
-   * @param rank Target rank
-   * @param len Bytes to write
-   * @param addr Remote memory address
-   * @param key Remote memory key
-   * @param imm_data Immediate data
-   * @param ch Channel index
-   * @return Bytes written
-   */
-  [[nodiscard]] Coro<ssize_t> Write(int rank, size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
-    co_return co_await Write(rank, data_, len, addr, key, imm_data, ch);
-  }
-
-  /**
-   * @brief Send entire internal buffer
-   * @param rank Target rank
-   * @param ch Channel index
-   * @return Bytes sent
-   */
-  [[nodiscard]] Coro<ssize_t> Send(int rank, size_t ch) { co_return co_await Send(rank, data_, size_, ch); }
-
-  /**
-   * @brief Receive into entire internal buffer
-   * @param rank Source rank
-   * @param ch Channel index
-   * @return Bytes received
-   */
-  [[nodiscard]] Coro<ssize_t> Recv(int rank, size_t ch) { co_return co_await Recv(rank, data_, size_, ch); }
-
-  /**
-   * @brief Write entire internal buffer to remote memory
-   * @param rank Target rank
-   * @param addr Remote memory address
-   * @param key Remote memory key
-   * @param imm_data Immediate data
-   * @param ch Channel index
-   * @return Bytes written
-   */
-  [[nodiscard]] Coro<ssize_t> Write(int rank, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
-    co_return co_await Write(rank, data_, size_, addr, key, imm_data, ch);
-  }
-
-  /**
-   * @brief Send all from internal buffer
-   * @param rank Target rank
-   * @param len Bytes to send
-   * @param ch Channel index
-   * @return Total bytes sent
-   */
-  [[nodiscard]] Coro<ssize_t> Sendall(int rank, size_t len, size_t ch) { co_return co_await Sendall(rank, data_, len, ch); }
-
-  /**
-   * @brief Receive all into internal buffer
-   * @param rank Source rank
-   * @param len Bytes to receive
-   * @param ch Channel index
-   * @return Total bytes received
-   */
-  [[nodiscard]] Coro<ssize_t> Recvall(int rank, size_t len, size_t ch) { co_return co_await Recvall(rank, data_, len, ch); }
-
-  /**
-   * @brief Write all from internal buffer to remote memory
-   * @param rank Target rank
-   * @param len Bytes to write
-   * @param addr Remote memory address
-   * @param key Remote memory key
-   * @param imm_data Immediate data
-   * @param ch Channel index
-   * @return Total bytes written
-   */
-  [[nodiscard]] Coro<ssize_t> Writeall(int rank, size_t len, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
-    co_return co_await Writeall(rank, data_, len, addr, key, imm_data, ch);
-  }
-
-  /**
-   * @brief Send all of entire internal buffer
-   * @param rank Target rank
-   * @param ch Channel index
-   * @return Total bytes sent
-   */
-  [[nodiscard]] Coro<ssize_t> Sendall(int rank, size_t ch) { co_return co_await Sendall(rank, data_, size_, ch); }
-
-  /**
-   * @brief Receive all into entire internal buffer
-   * @param rank Source rank
-   * @param ch Channel index
-   * @return Total bytes received
-   */
-  [[nodiscard]] Coro<ssize_t> Recvall(int rank, size_t ch) { co_return co_await Recvall(rank, data_, size_, ch); }
-
-  /**
-   * @brief Write all of entire internal buffer to remote memory
-   * @param rank Target rank
-   * @param addr Remote memory address
-   * @param key Remote memory key
-   * @param imm_data Immediate data
-   * @param ch Channel index
-   * @return Total bytes written
-   */
-  [[nodiscard]] Coro<ssize_t> Writeall(int rank, uint64_t addr, uint64_t key, uint64_t imm_data, size_t ch) {
-    co_return co_await Writeall(rank, data_, size_, addr, key, imm_data, ch);
-  }
-
-  /**
-   * @brief Wait for immediate data from remote peer
-   * @param imm_data Expected immediate data value (must be > 0)
-   * @return Coroutine that completes when immediate data is received
-   */
-  [[nodiscard]] Coro<> WaitImmdata(uint64_t imm_data) {
-    if (imm_data == 0) [[unlikely]]
-      throw std::invalid_argument("imm_data must be greater than 0");
-    co_return co_await ImmdataAwaiter{imm_data};
-  }
+class Buffer : public rdma::Buffer<BufferBackend> {
+  using Base = rdma::Buffer<BufferBackend>;
 
  protected:
-  Buffer(std::vector<EFA>& efas, std::vector<std::vector<Channel>>& channels, size_t size) : efas_{efas}, channels_{channels}, size_{size} {
-    ASSERT(size > 0 && !efas_.empty());
-  }
-
-  /**
-   * @brief Align pointer to specified boundary
-   */
-  [[nodiscard]] static constexpr void* Align(void* ptr, size_t align) noexcept { return (void*)(((uintptr_t)ptr + align - 1) & ~(align - 1)); }
-
-  /**
-   * @brief Build RMA IOV from memory region
-   */
-  [[nodiscard]] static fi_rma_iov MakeRmaIov(void* data, size_t size, fid_mr* mr) noexcept {
-    return {reinterpret_cast<uint64_t>(data), size, mr->key};
-  }
-
-  std::vector<EFA>& efas_;                       ///< Reference to Peer's EFAs [num_channels]
-  std::vector<std::vector<Channel>>& channels_;  ///< Reference to Peer's channels[world_size][num_channels]
-  std::vector<struct fid_mr*> mrs_;              ///< Memory regions [num_channels] - one MR per EFA
-  size_t size_ = 0;
-  void* raw_ = nullptr;
-  void* data_ = nullptr;
+  Buffer(std::vector<EFA>& efas, std::vector<std::vector<Channel>>& channels, size_t size) : Base(efas, channels, size) {}
 };
 
 /**
