@@ -128,8 +128,9 @@ class SymmetricMemory : public BufferType, public SymmetricMemoryBase<QueueType,
    */
   [[nodiscard]] Coro<ssize_t> Writeall(int rank, uint64_t imm_data) {
     ASSERT(rank >= 0 && rank < this->world_size_);
-    ASSERT(!this->channels_[rank].empty());
-    const size_t num_channels = this->channels_[rank].size();
+    auto& channels = this->channels_[rank];
+    ASSERT(!channels.empty());
+    const size_t num_channels = channels.size();
     const size_t total_size = this->Size();
     const size_t chunk_size = total_size / num_channels;
     const auto& remote_rma = GetRemoteRmaIovs(rank);
@@ -145,7 +146,7 @@ class SymmetricMemory : public BufferType, public SymmetricMemoryBase<QueueType,
       auto* mr = this->mrs_[ch];
       auto addr = remote_rma[ch].addr + offset;
       auto key = remote_rma[ch].key;
-      futures.emplace_back(this->channels_[rank][ch].Writeall(data + offset, len, mr, addr, key, Base::EncodeImmdata(imm_data, ch)));
+      futures.emplace_back(channels[ch].Writeall(data + offset, len, mr, addr, key, Base::EncodeImmdata(imm_data, ch)));
     }
 
     // Must wait for ALL futures even on error to prevent use-after-free.
