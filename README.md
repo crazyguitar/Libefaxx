@@ -63,53 +63,26 @@ enabling a more straightforward programming model without manual callback manage
 The example below shows how to build a PoC using pure [libfabric](https://github.com/ofiwg/libfabric/) and [MPI](https://www.open-mpi.org/).
 
 ```cpp
-#include <io/runner.h>
+#include <bench/arguments.h>
 #include <rdma/fabric/memory.h>
+#include <bench/modules/sendrecv.cuh>
 #include <bench/mpi/fabric.cuh>
-
-struct PairBench {
-  int target;
-  template <typename T>
-  void operator()(FabricBench& peer, FabricBench::Buffers<T>& send, FabricBench::Buffers<T>& recv) {
-    for (auto& efa : peer.efas) IO::Get().Join<FabricSelector>(efa);
-    Run([&]() -> Coro<> {
-      size_t channel = 0;
-      if (peer.mpi.GetWorldRank() == 0) {
-        co_await send[target]->Sendall(channel);
-        co_await recv[target]->Recvall(channel);
-      } else if (peer.mpi.GetWorldRank() == target) {
-        co_await recv[0]->Recvall(channel);
-        co_await send[0]->Sendall(channel);
-      }
-      for (auto& efa : peer.efas) IO::Get().Quit<FabricSelector>(efa);
-    }());
-  }
-};
-
-template <typename BufType>
-struct Test {
-  static BenchResult Run(size_t size) {
-    FabricBench peer;
-    peer.Exchange();
-    peer.Connect();
-    int rank = peer.mpi.GetWorldRank();
-    int world = peer.mpi.GetWorldSize();
-    auto send = peer.Alloc<BufType>(size, rank);
-    auto recv = peer.Alloc<BufType>(size, -1);
-    auto noop = [](auto&, auto&) {};
-    std::vector<BenchResult> res;
-    for (int t = 1; t < world; ++t) res.emplace_back(peer.Bench(send, recv, PairBench{t}, noop, 100));
-    return res;
-  }
-};
-
-using DeviceTest = Test<SymmetricDMAMemory>;
 
 // mpirun -np 2 --npernode 1 example
 
 int main(int argc, char *argv[]) {
   size_t bufsize = 128 << 10; // 128k
-  auto results = DeviceTest::Run(bufsize);
+  FabricBench peer;
+  peer.Exchange();
+  peer.Connect();
+  int rank = peer.mpi.GetWorldRank();
+
+  auto send = peer.Alloc<fi::SymmetricDMAMemory>(bufsize, rank);
+  auto recv = peer.Alloc<fi::SymmetricDMAMemory>(bufsize, -1);
+  peer.Handshake(send, recv);
+
+  auto verify = [](auto&, auto&) {};
+  auto result = peer.Bench("test", send, recv, PairBench<FabricBench, fi::FabricSelector>{1}, verify, 100);
   return 0;
 }
 ```
